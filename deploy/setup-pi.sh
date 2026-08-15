@@ -263,9 +263,9 @@ else
   info "Probando SIN cookies…"
 fi
 
-YTDLP_TEST=$(venv/bin/yt-dlp -g -f bestaudio --no-warnings \
+YTDLP_TEST=$(venv/bin/yt-dlp -g -f bestaudio/best --no-warnings \
   $COOKIES_ARG \
-  --extractor-args "youtube:player_client=web" \
+  --extractor-args "youtube:player_client=android_music,ios,android,web" \
   "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 || true)
 
 if [[ "$YTDLP_TEST" =~ ^https:// ]]; then

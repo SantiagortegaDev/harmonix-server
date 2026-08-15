@@ -79,14 +79,16 @@ YTDLP_BASE_ARGS = [
     "--sleep-requests", "1",                 # 1s entre requests (suave)
     "--sleep-interval", "1",
     "--max-sleep-interval", "3",
-    # Cliente WEB (NO android). Razón:
-    # - android solo devuelve formatos combinados video+audio (itag=18 mp4).
-    #   Eso hace que el navegador descargue video también = ancho de banda
-    #   desperdiciado + problemas de streaming.
-    # - web siempre devuelve bestaudio (itag 140 m4a, 251 webm) siempre y
-    #   cuando tengamos cookies activas (que ya las tenemos).
-    # - Con IP residencial + cookies, web client es perfectamente seguro.
-    "--extractor-args", "youtube:player_client=web",
+    # Múltiples player clients en orden de prioridad.
+    # Razón de cada uno:
+    # - android_music: cliente YouTube Music Android → devuelve bestaudio
+    #   (itag 140 m4a / 251 webm) sin PO token. Ideal.
+    # - ios: cliente iOS → a veces devuelve audio-only sin PO token.
+    # - android: cliente Android genérico → devuelve itag=18 video+audio.
+    #   No es ideal pero el navegador reproduce el audio del mp4 igual.
+    # - web: cliente web browser → requiere PO token para audio/video.
+    #   Sin PO token solo entrega storyboards (imágenes). Último recurso.
+    "--extractor-args", "youtube:player_client=android_music,ios,android,web",
 ]
 
 # Añadir --cookies si está activado y el archivo existe
@@ -215,19 +217,21 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Map quality → formato yt-dlp
-    # Con cliente web + cookies, bestaudio siempre está disponible
-    # (itag 140 = m4a 128kbps, itag 251 = webm 160kbps).
-    # El fallback /best solo aplica en casos patológicos (videos
-    # restringidos sin audio separado), mejor caer a error que a
-    # itag=18 video+audio que rompe el streaming.
+    # IMPORTANTE: mantener el fallback /best porque según el player_client
+    # que termine funcionando, bestaudio puede no estar disponible:
+    #   - android_music/ios → suele dar bestaudio (itag 140/251)
+    #   - android → solo da itag=18 (video+audio combined)
+    #   - web sin PO token → solo storyboards (format error)
+    # Con /best, si bestaudio falla, cae a itag=18 que igual reproduce
+    # audio en el navegador (aunque baje video de regalo).
     if quality == "best":
-        fmt = "bestaudio"
+        fmt = "bestaudio/best"
     elif quality == "128":
-        fmt = "bestaudio[abr<=128]"
+        fmt = "bestaudio[abr<=128]/bestaudio/best"
     elif quality == "192":
-        fmt = "bestaudio"
+        fmt = "bestaudio/best"
     else:  # auto
-        fmt = "bestaudio"
+        fmt = "bestaudio/best"
 
     args = YTDLP_BASE_ARGS + ["-f", fmt, url]
 
@@ -278,7 +282,7 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
                 if "--cookies" in YTDLP_BASE_ARGS:
                     idx = YTDLP_BASE_ARGS.index("--cookies")
                     list_args += ["--cookies", YTDLP_BASE_ARGS[idx + 1]]
-                list_args += ["--extractor-args", "youtube:player_client=web"]
+                list_args += ["--extractor-args", "youtube:player_client=android_music,ios,android,web"]
                 list_proc = await asyncio.create_subprocess_exec(
                     *list_args,
                     stdout=asyncio.subprocess.PIPE,
