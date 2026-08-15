@@ -265,7 +265,7 @@ fi
 
 YTDLP_TEST=$(venv/bin/yt-dlp -g -f bestaudio --no-warnings \
   $COOKIES_ARG \
-  --extractor-args "youtube:player_client=mweb" \
+  --extractor-args "youtube:player_client=android,web" \
   "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 || true)
 
 if [[ "$YTDLP_TEST" =~ ^https:// ]]; then

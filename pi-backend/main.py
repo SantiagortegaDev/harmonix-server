@@ -79,7 +79,9 @@ YTDLP_BASE_ARGS = [
     "--sleep-requests", "1",                 # 1s entre requests (suave)
     "--sleep-interval", "1",
     "--max-sleep-interval", "3",
-    "--extractor-args", "youtube:player_client=mweb",  # cliente móvil, más estable
+    # Cliente android: anti-ban (IP residencial) Y devuelve formatos
+    # de audio separados (a diferencia de mweb que solo da video+audio).
+    "--extractor-args", "youtube:player_client=android,web",
 ]
 
 # Añadir --cookies si está activado y el archivo existe
