@@ -233,9 +233,18 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+        # 60s de timeout. Antes era 20s, pero la primera extracción con
+        # cookies + sleep-requests puede tardar 30-50s si YouTube está lento.
+        # Cloudflare Tunnel tiene 30s default, así que subimos también
+        # el proxy timeout del lado del túnel (configurar en CF dashboard).
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="yt-dlp timeout (¿IP baneada?)")
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        log.error(f"[extract] yt-dlp timeout tras 60s para {video_id}")
+        raise HTTPException(status_code=504, detail="yt-dlp timeout (¿IP baneada o sin cookies?)")
     except FileNotFoundError as e:
         log.error(f"[extract] yt-dlp binario no encontrado: {YTDLP_BIN}")
         raise HTTPException(
@@ -291,17 +300,38 @@ async def stream_passthrough(upstream_url: str, range_header: Optional[str]):
     # UA mínimo para no levantar sospechas
     headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0), follow_redirects=True) as client:
-        async with client.stream("GET", upstream_url, headers=headers) as upstream:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0, connect=15.0),
+        follow_redirects=True,
+        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+    ) as client:
+        try:
+            req = client.build_request("GET", upstream_url, headers=headers)
+            upstream = await client.send(req, stream=True)
+        except httpx.ConnectError as e:
+            log.error(f"[passthrough] connect error: {e}")
+            raise HTTPException(status_code=502, detail=f"No se pudo conectar a googlevideo: {e}")
+        except httpx.ReadTimeout as e:
+            log.error(f"[passthrough] read timeout: {e}")
+            raise HTTPException(status_code=504, detail="googlevideo timeout")
+        except Exception as e:
+            log.error(f"[passthrough] error: {type(e).__name__}: {e}")
+            raise HTTPException(status_code=502, detail=f"Passthrough error: {type(e).__name__}")
+
+        try:
             if upstream.status_code >= 400:
                 body = await upstream.aread()
                 log.warning(f"[passthrough] upstream {upstream.status_code}: {body[:200]}")
+                await upstream.aclose()
                 raise HTTPException(status_code=upstream.status_code, detail="Upstream error")
+
+            log.info(f"[passthrough] upstream {upstream.status_code} content-type={upstream.headers.get('content-type')} len={upstream.headers.get('content-length', '?')}")
 
             # Headers que pasamos al cliente
             pass_headers = {
                 "Accept-Ranges": "bytes",
                 "Content-Type": upstream.headers.get("content-type", "audio/mpeg"),
+                "Cache-Control": "public, max-age=3600",
             }
             if "content-length" in upstream.headers:
                 pass_headers["Content-Length"] = upstream.headers["content-length"]
@@ -315,7 +345,9 @@ async def stream_passthrough(upstream_url: str, range_header: Optional[str]):
                     async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
                         yield chunk
                 except Exception as e:
-                    log.error(f"[passthrough] stream error: {e}")
+                    log.error(f"[passthrough] stream error: {type(e).__name__}: {e}")
+                finally:
+                    await upstream.aclose()
 
             return StreamingResponse(
                 gen(),
@@ -323,6 +355,12 @@ async def stream_passthrough(upstream_url: str, range_header: Optional[str]):
                 headers=pass_headers,
                 media_type=pass_headers["Content-Type"],
             )
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.error(f"[passthrough] setup error: {type(e).__name__}: {e}")
+            await upstream.aclose()
+            raise HTTPException(status_code=500, detail=f"Passthrough setup: {type(e).__name__}")
 
 # ============================================================
 # APP
