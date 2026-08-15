@@ -27,9 +27,9 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, unquote
 
-import httpx
+import aiohttp
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -79,9 +79,14 @@ YTDLP_BASE_ARGS = [
     "--sleep-requests", "1",                 # 1s entre requests (suave)
     "--sleep-interval", "1",
     "--max-sleep-interval", "3",
-    # Cliente android: anti-ban (IP residencial) Y devuelve formatos
-    # de audio separados (a diferencia de mweb que solo da video+audio).
-    "--extractor-args", "youtube:player_client=android,web",
+    # Cliente WEB (NO android). Razón:
+    # - android solo devuelve formatos combinados video+audio (itag=18 mp4).
+    #   Eso hace que el navegador descargue video también = ancho de banda
+    #   desperdiciado + problemas de streaming.
+    # - web siempre devuelve bestaudio (itag 140 m4a, 251 webm) siempre y
+    #   cuando tengamos cookies activas (que ya las tenemos).
+    # - Con IP residencial + cookies, web client es perfectamente seguro.
+    "--extractor-args", "youtube:player_client=web",
 ]
 
 # Añadir --cookies si está activado y el archivo existe
@@ -210,18 +215,19 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Map quality → formato yt-dlp
-    # Permitir fallback a /best porque el cliente android NO siempre
-    # devuelve bestaudio para todos los videos. En esos casos, caer al
-    # formato combinado (itag=18 = 360p mp4 con audio) es mejor que nada.
-    # El navegador solo reproduce el audio del mp4 igual.
+    # Con cliente web + cookies, bestaudio siempre está disponible
+    # (itag 140 = m4a 128kbps, itag 251 = webm 160kbps).
+    # El fallback /best solo aplica en casos patológicos (videos
+    # restringidos sin audio separado), mejor caer a error que a
+    # itag=18 video+audio que rompe el streaming.
     if quality == "best":
-        fmt = "bestaudio/best"
+        fmt = "bestaudio"
     elif quality == "128":
-        fmt = "bestaudio[abr<=128]/bestaudio/best"
+        fmt = "bestaudio[abr<=128]"
     elif quality == "192":
-        fmt = "bestaudio/best"
+        fmt = "bestaudio"
     else:  # auto
-        fmt = "bestaudio/best"
+        fmt = "bestaudio"
 
     args = YTDLP_BASE_ARGS + ["-f", fmt, url]
 
@@ -272,7 +278,7 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
                 if "--cookies" in YTDLP_BASE_ARGS:
                     idx = YTDLP_BASE_ARGS.index("--cookies")
                     list_args += ["--cookies", YTDLP_BASE_ARGS[idx + 1]]
-                list_args += ["--extractor-args", "youtube:player_client=android,web"]
+                list_args += ["--extractor-args", "youtube:player_client=web"]
                 list_proc = await asyncio.create_subprocess_exec(
                     *list_args,
                     stdout=asyncio.subprocess.PIPE,
@@ -320,92 +326,95 @@ async def stream_passthrough(upstream_url: str, range_header: Optional[str]):
     """
     Hace streaming HTTP del upstream (googlevideo) hacia el cliente.
     Soporta HTTP Range para que <audio> pueda seek.
+
+    IMPORTANTE: usamos aiohttp (NO httpx). Razón:
+    - httpx tiene un bug conocido con streaming 206 Partial Content a través
+      de la cadena de redirects 302 de googlevideo (rr1→rr4). El stream
+      arranca pero falla inmediatamente con 'ReadError' sin haber enviado
+      ningún byte. Esto produce miles de reconexiones del navegador.
+    - aiohttp maneja connection pooling + streaming + redirects de forma
+      nativa y estable, específicamente diseñado para descargar media.
     """
-    # Headers críticos para googlevideo:
-    # - Accept-Encoding: identity → sin compression. httpx + h2 + gzip
-    #   rompe el stream con ReadError silencioso en chunked.
-    # - Connection: keep-alive → reutilizar conexión para próximos Range.
-    headers = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",  # sin gzip, fundamental para stream
+        "Connection": "keep-alive",
+    }
     if range_header:
         headers["Range"] = range_header
-    headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
-    headers["Accept-Encoding"] = "identity"
-    headers["Accept"] = "*/*"
-    headers["Connection"] = "keep-alive"
 
-    # NO usar follow_redirects=True porque httpx pierde el stream en
-    # redirects 302 de googlevideo (rr1→rr4). Resolver manualmente.
-    client = httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0, connect=15.0),
-        follow_redirects=False,
-        limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-        # Forzar HTTP/1.1. httpx con HTTP/2 + streaming + Range tiene
-        # bugs que producen ReadError silencioso.
-        http2=False,
-        verify=True,
+    # Connector con keepalive para que los múltiples Range requests del
+    # navegador reutilicen la misma conexión TCP a googlevideo.
+    connector = aiohttp.TCPConnector(
+        limit=20,
+        limit_per_host=10,
+        keepalive_timeout=60,
+        enable_cleanup_closed=True,
+    )
+    timeout = aiohttp.ClientTimeout(
+        total=None,          # sin timeout total (audio puede durar 1h+)
+        connect=15,
+        sock_connect=15,
+        sock_read=300,       # 5 min sin datos = error (audio stuck)
+    )
+
+    session = aiohttp.ClientSession(
+        connector=connector,
+        timeout=timeout,
+        auto_decompress=False,  # no decompress (ya pedimos identity)
     )
 
     try:
-        # Resolver redirects manualmente hasta llegar al 200/206
-        current_url = upstream_url
-        upstream = None
-        for _ in range(5):  # máx 5 redirects
-            req = client.build_request("GET", current_url, headers=headers)
-            upstream = await client.send(req, stream=True)
-            if upstream.status_code in (301, 302, 303, 307, 308):
-                location = upstream.headers.get("location", "")
-                await upstream.aclose()
-                if not location:
-                    raise HTTPException(status_code=502, detail="Redirect sin Location")
-                log.info(f"[passthrough] redirect {upstream.status_code} → {location[:80]}")
-                current_url = location
-                continue
-            break
-        else:
-            if upstream:
-                await upstream.aclose()
-            raise HTTPException(status_code=502, detail="Demasiados redirects")
+        upstream = await session.get(upstream_url, headers=headers, allow_redirects=True)
 
-        if upstream.status_code >= 400:
-            body = await upstream.aread()
-            log.warning(f"[passthrough] upstream {upstream.status_code}: {body[:200]}")
-            await upstream.aclose()
-            await client.aclose()
-            raise HTTPException(status_code=upstream.status_code, detail="Upstream error")
+        if upstream.status >= 400:
+            body = await upstream.read()
+            log.warning(f"[passthrough] upstream {upstream.status}: {body[:200]}")
+            await upstream.release()
+            await session.close()
+            raise HTTPException(status_code=upstream.status, detail="Upstream error")
 
-        log.info(f"[passthrough] upstream {upstream.status_code} content-type={upstream.headers.get('content-type')} len={upstream.headers.get('content-length', '?')}")
+        ct = upstream.headers.get("Content-Type", "audio/mpeg")
+        cl = upstream.headers.get("Content-Length", "?")
+        cr = upstream.headers.get("Content-Range", "")
+        log.info(f"[passthrough] upstream {upstream.status} content-type={ct} len={cl} range={cr[:60]}")
 
         # Headers que pasamos al cliente
         pass_headers = {
             "Accept-Ranges": "bytes",
-            "Content-Type": upstream.headers.get("content-type", "audio/mpeg"),
+            "Content-Type": ct,
             "Cache-Control": "public, max-age=3600",
         }
-        # Para 206 Partial Content, NO pasar Content-Length al cliente.
-        # Razón: si el stream upstream se corta a mitad (ReadError),
-        # starlette/uvicorn lanza 'Response content shorter than
-        # Content-Length' porque ya habíamos prometido N bytes.
-        # Sin Content-Length, uvicorn usa Transfer-Encoding: chunked
-        # y el stream puede terminar 'naturalmente' sin error.
-        if upstream.status_code == 200 and "content-length" in upstream.headers:
-            pass_headers["Content-Length"] = upstream.headers["content-length"]
-        if "content-range" in upstream.headers:
-            pass_headers["Content-Range"] = upstream.headers["content-range"]
+        # Para 200 pasamos Content-Length. Para 206 pasamos Content-Range
+        # (Content-Length en 206 = tamaño del chunk, no del archivo, y
+        # starlette se queja si el stream se corta antes).
+        if upstream.status == 200 and cl != "?":
+            pass_headers["Content-Length"] = cl
+        if cr:
+            pass_headers["Content-Range"] = cr
 
-        status = upstream.status_code
+        status = upstream.status
 
         async def gen():
             bytes_sent = 0
             try:
-                async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
+                # aiohttp iter_any lee lo que llegue sin bloquear.
+                # chunk_size grande = menos overhead, mejor throughput.
+                async for chunk in upstream.content.iter_any():
+                    if not chunk:
+                        continue
                     bytes_sent += len(chunk)
                     yield chunk
                 log.info(f"[passthrough] stream done, sent {bytes_sent} bytes")
+            except asyncio.CancelledError:
+                log.info(f"[passthrough] client disconnected after {bytes_sent} bytes")
+                raise
             except Exception as e:
                 log.error(f"[passthrough] stream error after {bytes_sent} bytes: {type(e).__name__}: {e}")
             finally:
-                await upstream.aclose()
-                await client.aclose()
+                upstream.release()
+                await session.close()
 
         return StreamingResponse(
             gen(),
@@ -415,17 +424,17 @@ async def stream_passthrough(upstream_url: str, range_header: Optional[str]):
         )
     except HTTPException:
         raise
-    except httpx.ConnectError as e:
+    except aiohttp.ClientConnectorError as e:
         log.error(f"[passthrough] connect error: {e}")
-        await client.aclose()
+        await session.close()
         raise HTTPException(status_code=502, detail=f"No se pudo conectar a googlevideo: {e}")
-    except httpx.ReadTimeout as e:
-        log.error(f"[passthrough] read timeout: {e}")
-        await client.aclose()
+    except asyncio.TimeoutError:
+        log.error("[passthrough] connect timeout")
+        await session.close()
         raise HTTPException(status_code=504, detail="googlevideo timeout")
     except Exception as e:
         log.error(f"[passthrough] error: {type(e).__name__}: {e}")
-        await client.aclose()
+        await session.close()
         raise HTTPException(status_code=502, detail=f"Passthrough error: {type(e).__name__}")
 
 # ============================================================
