@@ -100,6 +100,19 @@ export default function Home() {
       }
       const data = await res.json();
 
+      // Log para debug — ver en consola del navegador qué URL se generó
+      console.log("[pi-stream] resolve response:", data);
+
+      // Validar que sea una URL absoluta con esquema http(s)
+      if (!data.streamUrl || !/^https?:\/\//i.test(data.streamUrl)) {
+        toast.error(
+          `URL de stream inválida: "${data.streamUrl}". Revisa PI_STREAM_BASE en Vercel.`,
+          { duration: 8000 }
+        );
+        setLoadingStream(false);
+        return;
+      }
+
       const audio = audioRef.current;
       if (!audio) return;
 

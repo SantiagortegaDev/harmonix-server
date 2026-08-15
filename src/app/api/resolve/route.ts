@@ -31,16 +31,29 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const piBase = process.env.PI_STREAM_BASE;
+  let piBase = process.env.PI_STREAM_BASE?.trim();
   if (!piBase) {
     return NextResponse.json(
-      { error: "Falta PI_STREAM_BASE en .env del frontend (ej: https://stream.tudominio.com)" },
+      {
+        error:
+          "Falta PI_STREAM_BASE en variables de entorno de Vercel. Va a: Vercel → Project → Settings → Environment Variables. Valor esperado: https://api-stream-harmonix.santiagortega.dev (CON https://)",
+        hint: "Sin el esquema https:// el navegador trata el dominio como path relativo.",
+      },
       { status: 500 }
     );
   }
 
+  // Normalizar: si no empieza con http:// o https://, agregar https://
+  // Esto evita el bug de "URL relativa" cuando alguien configura solo
+  // "api-stream-harmonix.santiagortega.dev" sin esquema.
+  if (!/^https?:\/\//i.test(piBase)) {
+    piBase = `https://${piBase}`;
+  }
+  // Quitar trailing slash
+  piBase = piBase.replace(/\/$/, "");
+
   // Construimos la URL final. El navegador la pondrá como <audio src>.
-  const streamUrl = `${piBase.replace(/\/$/, "")}/stream/${encodeURIComponent(videoId)}?quality=${encodeURIComponent(quality)}`;
+  const streamUrl = `${piBase}/stream/${encodeURIComponent(videoId)}?quality=${encodeURIComponent(quality)}`;
 
   return NextResponse.json({
     videoId,
