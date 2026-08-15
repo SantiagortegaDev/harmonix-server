@@ -320,11 +320,18 @@ Type=simple
 User=$USER_NAME
 WorkingDirectory=$USER_HOME/pi-stream
 EnvironmentFile=$USER_HOME/pi-stream/.env
-ExecStart=$USER_HOME/pi-stream/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 2
+ExecStart=$USER_HOME/pi-stream/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5s
 StandardOutput=append:$USER_HOME/pi-stream/stream.log
 StandardError=append:$USER_HOME/pi-stream/stream.log
+
+# Seguridad
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=$USER_HOME/pi-stream
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

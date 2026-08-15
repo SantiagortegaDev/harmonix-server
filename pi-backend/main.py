@@ -206,7 +206,7 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
     else:  # auto
         fmt = "bestaudio/best"
 
-    args = YTDLP_BASE_ARGS + ["-f", fmt, "--print", "%(ext)s|%(format_id)s", url]
+    args = YTDLP_BASE_ARGS + ["-f", fmt, url]
 
     if not rate_limit_ok():
         raise HTTPException(status_code=429, detail="Rate limit reached. Intenta en unos minutos.")
@@ -234,22 +234,28 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
             raise HTTPException(status_code=403, detail="YouTube requiere verificación (IP bajo sospecha)")
         raise HTTPException(status_code=502, detail=f"yt-dlp error: {err[:200]}")
 
-    # yt-dlp con --print devuelve: URL\n(ext|format_id)
+    # yt-dlp -g imprime solo la URL (una o varias líneas).
+    # Tomamos la primera línea válida que empiece con http.
     text = stdout.decode(errors="ignore").strip()
-    lines = text.split("\n")
-    if len(lines) < 2 or not lines[0]:
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines or not lines[0].startswith("http"):
         raise HTTPException(status_code=502, detail="yt-dlp no devolvió URL")
-    stream_url = lines[0].strip()
-    meta = lines[1].split("|") if len(lines) > 1 else ["", ""]
-    ext = meta[0] if meta else ""
-    fmt_id = meta[1] if len(meta) > 1 else ""
+    stream_url = lines[0]
 
-    # MIME por extensión
-    mime_map = {"webm": "audio/webm", "m4a": "audio/mp4", "mp4": "audio/mp4", "ogg": "audio/ogg", "opus": "audio/ogg"}
-    mime = mime_map.get(ext.lower(), "audio/mpeg")
+    # MIME: las URLs de googlevideo traen ?mime=audio%2Fwebm etc.
+    mime = "audio/mpeg"
+    if "googlevideo.com" in stream_url:
+        try:
+            from urllib.parse import urlparse, parse_qs, unquote
+            q = parse_qs(urlparse(stream_url).query)
+            m = q.get("mime", [None])[0]
+            if m:
+                mime = unquote(m)
+        except Exception:
+            pass
 
-    log.info(f"[extract] OK ext={ext} fmt={fmt_id} url_len={len(stream_url)}")
-    return {"url": stream_url, "mime": mime, "ext": ext, "format_id": fmt_id}
+    log.info(f"[extract] OK mime={mime} url_len={len(stream_url)}")
+    return {"url": stream_url, "mime": mime, "ext": "", "format_id": ""}
 
 # ============================================================
 # PASSTHROUGH PROXY

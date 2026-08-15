@@ -8,16 +8,18 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/pi-stream
 EnvironmentFile=/home/pi/pi-stream/.env
-ExecStart=/home/pi/pi-stream/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 2
+ExecStart=/home/pi/pi-stream/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5s
 StandardOutput=append:/home/pi/pi-stream/stream.log
 StandardError=append:/home/pi/pi-stream/stream.log
 
-# Seguridad
+# Seguridad — ojo: ProtectHome=read-only bloquea la DB SQLite.
+# ReadWritePaths abre una excepción para el directorio del proyecto.
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=read-only
+ReadWritePaths=/home/pi/pi-stream
 PrivateTmp=yes
 
 [Install]
