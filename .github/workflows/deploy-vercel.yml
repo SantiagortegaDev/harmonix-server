@@ -1,0 +1,95 @@
+# ============================================================
+# Workflow: Deploy frontend a Vercel
+#
+# Vercel detecta pushes a `main` automáticamente y deploya solo
+# (auto-deploy on push). Este workflow es solo para:
+#   - Mostrar el estado del deploy en la tab Actions
+#   - Disparar deploy manual si Vercel no lo hizo
+#   - Validar que el build pasa antes del deploy real
+#
+# NOTA: Para que esto funcione necesitas:
+#   1. Conectar el repo a Vercel (https://vercel.com/new)
+#   2. Configurar variables de entorno en Vercel:
+#      - YOUTUBE_API_KEY
+#      - PI_STREAM_BASE (https://stream.tudominio.com)
+#   3. (Opcional) Si quieres deploy desde Actions en vez de auto-deploy:
+#      - Instalar Vercel CLI: npm i -g vercel
+#      - Obtener token: https://vercel.com/account/tokens
+#      - Añadir secret VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID
+# ============================================================
+
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'package.json'
+      - 'bun.lock'
+      - 'next.config.ts'
+      - 'tsconfig.json'
+      - 'tailwind.config.ts'
+      - 'postcss.config.mjs'
+      - 'components.json'
+      - 'prisma/**'
+  workflow_dispatch:
+
+jobs:
+  verify-build:
+    name: Verify build before Vercel auto-deploys
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Build check
+        run: bun run build
+        env:
+          YOUTUBE_API_KEY: dummy
+          PI_STREAM_BASE: https://dummy.example.com
+
+      - name: Report status
+        if: always()
+        run: |
+          echo "Build verification finished."
+          echo "Vercel auto-deploys on push to main — check status at:"
+          echo "  https://vercel.com/dashboard"
+          echo ""
+          echo "If Vercel did NOT auto-deploy, trigger it manually:"
+          echo "  Actions tab → 'Deploy to Vercel' → Run workflow"
+
+  # Descomentar este job si quieres deployar desde Actions en vez de
+  # auto-deploy de Vercel. Necesitas VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID
+  # como secrets.
+  #
+  # deploy:
+  #   name: Deploy to Vercel
+  #   runs-on: ubuntu-latest
+  #   needs: verify-build
+  #   if: github.ref == 'refs/heads/main'
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install Vercel CLI
+  #       run: npm i -g vercel
+  #     - name: Deploy
+  #       run: |
+  #         vercel --prod --yes \
+  #           --token ${{ secrets.VERCEL_TOKEN }} \
+  #           --scope ${{ secrets.VERCEL_ORG_ID }}
+  #       env:
+  #         VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

@@ -48,6 +48,13 @@ RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "250"))  # <300 de YouTube
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8000"))
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
+# --- Cookies opcionales ---
+# USE_COOKIES=true activa el uso de cookies.txt para resolver errores
+# "Sign in to confirm you're not a bot" y similares.
+# El archivo debe llamarse cookies.txt y estar junto a main.py.
+USE_COOKIES = os.getenv("USE_COOKIES", "false").lower() == "true"
+COOKIES_PATH = BASE_DIR / "cookies.txt"
+
 # yt-dlp flags compartidos
 YTDLP_BASE_ARGS = [
     "yt-dlp",
@@ -62,6 +69,14 @@ YTDLP_BASE_ARGS = [
     "--extractor-args", "youtube:player_client=mweb",  # cliente móvil, más estable
 ]
 
+# Añadir --cookies si está activado y el archivo existe
+# (se evalúa en import time; si añades cookies después, reinicia el servicio)
+if USE_COOKIES and COOKIES_PATH.exists():
+    YTDLP_BASE_ARGS += ["--cookies", str(COOKIES_PATH)]
+elif USE_COOKIES and not COOKIES_PATH.exists():
+    # Lo avisamos en boot después de configurar logging
+    pass
+
 # ============================================================
 # LOGGING
 # ============================================================
@@ -75,6 +90,16 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("pi-stream")
+
+# Aviso de cookies (post-logging para que se vea en el log)
+if USE_COOKIES and COOKIES_PATH.exists():
+    log.info(f"[boot] Cookies activadas desde {COOKIES_PATH}")
+elif USE_COOKIES and not COOKIES_PATH.exists():
+    log.warning(f"[boot] USE_COOKIES=true pero {COOKIES_PATH} no existe — ignorando cookies")
+    # Quitar cualquier --cookies que se haya añadido por error
+    YTDLP_BASE_ARGS = [a for a in YTDLP_BASE_ARGS if a != "--cookies"]
+else:
+    log.info("[boot] Cookies desactivadas (USE_COOKIES=false)")
 
 # ============================================================
 # DB
@@ -318,7 +343,7 @@ async def info(video_id: str, quality: str = "auto"):
 async def stream(
     video_id: str,
     request: Request,
-    quality: str = Query("auto", regex="^(auto|best|128|192)$"),
+    quality: str = Query("auto", pattern="^(auto|best|128|192)$"),
 ):
     """
     Endpoint principal. Devuelve el audio como stream HTTP.

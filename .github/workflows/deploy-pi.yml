@@ -67,9 +67,12 @@ jobs:
               pip install -r requirements.txt --quiet
               pip install --upgrade yt-dlp --quiet
             fi
-            # Copiar main.py actualizado
+            # Copiar archivos actualizados (preservando .env y cookies.txt locales)
             cp ~/pi-stream-src/pi-backend/main.py .
             cp ~/pi-stream-src/pi-backend/pi-stream.service . 2>/dev/null || true
+            # Sincronizar .env.example si cambió (no sobrescribe el .env real)
+            cp ~/pi-stream-src/pi-backend/.env.example .env.example 2>/dev/null || true
+            # cookies.txt NO se toca — es local en la Pi, nunca viene del repo
             sudo systemctl restart pi-stream
             sleep 2
             sudo systemctl is-active --quiet pi-stream && echo "✓ pi-stream restarted OK" || {

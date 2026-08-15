@@ -41,10 +41,21 @@ jobs:
             pip install --upgrade yt-dlp --quiet
             NEW_VER=$(yt-dlp --version)
             echo "yt-dlp: $OLD_VER → $NEW_VER"
-            # Test que sigue funcionando
+
+            # Test que sigue funcionando (con cookies si están activadas)
+            COOKIES_ARG=""
+            if [[ -f cookies.txt ]] && grep -q "^USE_COOKIES=true" .env; then
+              COOKIES_ARG="--cookies cookies.txt"
+              echo "Probando CON cookies…"
+            else
+              echo "Probando SIN cookies…"
+            fi
+
             TEST_URL=$(yt-dlp -g -f bestaudio --no-warnings \
+              $COOKIES_ARG \
               --extractor-args "youtube:player_client=mweb" \
               "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 || true)
+
             if [[ "$TEST_URL" =~ ^https:// ]]; then
               echo "✓ yt-dlp funciona correctamente"
               sudo systemctl restart pi-stream

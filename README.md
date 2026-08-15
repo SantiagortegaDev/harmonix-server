@@ -1,9 +1,9 @@
 # Pi Stream — YouTube Music Streaming con Raspberry Pi 5
 
-Streaming ultra-rápido de YouTube Music con arquitectura anti-ban: la Pi 5 (IP residencial) extrae las URLs firmadas con `yt-dlp`, las cachea en SQLite con TTL 5h, y hace passthrough hacia los clientes. El frontend Next.js (servido desde un VPS pequeño) solo maneja búsqueda y UI.
+Streaming ultra-rápido de YouTube Music con arquitectura anti-ban: la Pi 5 (IP residencial) extrae las URLs firmadas con `yt-dlp`, las cachea en SQLite con TTL 5h, y hace passthrough hacia los clientes. El frontend Next.js se sirve desde **Vercel** (CDN global gratis) y solo maneja búsqueda y UI.
 
 ```
-Usuario → app.tudominio.com (VPS) → YouTube Data API v3 (búsqueda)
+Usuario → app.tudominio.com (Vercel CDN) → YouTube Data API v3 (búsqueda)
          ↓ click en canción
          stream.tudominio.com (Pi 5 vía Cloudflare Tunnel)
          ↓
@@ -17,56 +17,81 @@ Usuario → app.tudominio.com (VPS) → YouTube Data API v3 (búsqueda)
 
 ## 🚀 Instalación con una sola línea
 
-El script detecta automáticamente si estás en una Pi (ARM) o un VPS (x86_64) e instala lo que corresponda:
+### Backend en la Raspberry Pi 5
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/SantiagortegaDev/harmonix-server/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/SantiagortegaDev/harmonix-server/main/deploy/setup-pi.sh)
 ```
 
-**En la Raspberry Pi 5** instala: Python venv, FastAPI, yt-dlp, ffmpeg, SQLite, systemd service.
+Instala: Python venv, FastAPI, yt-dlp, ffmpeg, SQLite, systemd service.
+**Te pedirá pegar el `cookies.txt`** (opcional pero recomendado para evitar bans).
 
-**En el VPS** instala: Node.js 22, bun, Next.js build, Caddy reverse proxy, systemd service.
+### Frontend en Vercel
 
-> Requiere: usuario con sudo, conexión a internet. El script pedirá confirmación antes de instalar.
+1. Ve a [vercel.com/new](https://vercel.com/new)
+2. Importa el repo `SantiagortegaDev/harmonix-server`
+3. Añade las variables de entorno (ver [`docs/VERCEL_DEPLOY.md`](docs/VERCEL_DEPLOY.md))
+4. Deploy ✅
+
+---
+
+## 🍪 Cookies.txt (anti-ban)
+
+El script de instalación te pedirá pegar el contenido de `cookies.txt`. Esto resuelve errores comunes de yt-dlp como:
+
+- `Sign in to confirm you're not a bot`
+- `Unable to extract video data`
+- Videos con restricción de edad
+- Rate limits agresivos
+
+### Cómo obtener cookies.txt
+
+1. Instala la extensión **"Get cookies.txt LOCALLY"** en Chrome o Firefox
+2. Inicia sesión en youtube.com con una **cuenta secundaria** (no tu principal, por si la banean)
+3. Abre la extensión y exporta como `cookies.txt`
+4. Durante el install te pedirá pegar el contenido, o puedes subirlo después:
+   ```bash
+   scp cookies.txt pi@tu-pi:~/pi-stream/cookies.txt
+   ssh pi@tu-pi "sudo systemctl restart pi-stream"
+   ```
+
+> ℹ️ Las cookies **NO se suben a GitHub** — están en `.gitignore` y solo viven en la Pi.
 
 ---
 
 ## 🔄 Deployment automático con GitHub Actions
 
-Ya tienes 4 workflows listos en `.github/workflows/`:
+Workflows en `.github/workflows/`:
 
 | Workflow | Trigger | Qué hace |
 |----------|---------|----------|
 | `ci.yml` | push/PR a main | Lint + build check (no deploya) |
 | `deploy-pi.yml` | push a main (cambios en `pi-backend/`) | SSH a Pi, `git pull`, restart systemd |
-| `deploy-vps.yml` | push a main (cambios en `src/`) | SSH a VPS, `bun install`, rebuild, restart |
-| `update-yt-dlp.yml` | cron semanal (lunes 04:00 UTC) | Actualiza yt-dlp en la Pi + smoke test |
+| `deploy-vercel.yml` | push a main (cambios en `src/`) | Verifica build; Vercel auto-deploya |
+| `update-yt-dlp.yml` | cron semanal (lunes 04:00 UTC) | Actualiza yt-dlp en la Pi + smoke test + rollback si falla |
 
 ### Setup de secrets (5 minutos)
 
-1. **Genera SSH keys dedicadas** en tu PC:
+1. **Genera SSH key dedicada** para la Pi:
    ```bash
    ssh-keygen -t ed25519 -f ~/.ssh/harmonix_pi -N ""
-   ssh-keygen -t ed25519 -f ~/.ssh/harmonix_vps -N ""
-   ```
-
-2. **Copia la public key a cada máquina**:
-   ```bash
    ssh-copy-id -i ~/.ssh/harmonix_pi.pub pi@tu-pi
-   ssh-copy-id -i ~/.ssh/harmonix_vps.pub user@tu-vps
    ```
 
-3. **Añade estos secrets** en `Settings → Secrets and variables → Actions`:
-   - `PI_HOST`, `PI_USER`, `PI_SSH_KEY`, `PI_SSH_PORT`
-   - `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_SSH_PORT`
-   - `MAIN_DOMAIN` (ej: `tudominio.com`)
+2. **Añade estos secrets** en `Settings → Secrets and variables → Actions`:
+   - `PI_HOST` — dominio o IP de la Pi (ej: `stream.tudominio.com`)
+   - `PI_USER` — usuario SSH (`pi`)
+   - `PI_SSH_KEY` — contenido de `~/.ssh/harmonix_pi` (privada)
+   - `PI_SSH_PORT` — `22` (o el que tengas)
+   - `MAIN_DOMAIN` — `tudominio.com` (sin subdominio)
 
-4. **Push a main** y se deploya solo:
+3. **Push a main** y se deploya solo:
    ```bash
    git push origin main
+   # → ci.yml corre
+   # → deploy-pi.yml actualiza la Pi (si cambiaron archivos de backend)
+   # → Vercel auto-deploya el frontend (si cambiaron archivos de frontend)
    ```
-
-Ver opciones alternativas (self-hosted runner, webhooks, Docker) en [`docs/DEPLOYMENT_OPTIONS.md`](docs/DEPLOYMENT_OPTIONS.md).
 
 ---
 
@@ -74,17 +99,18 @@ Ver opciones alternativas (self-hosted runner, webhooks, Docker) en [`docs/DEPLO
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Cloudflare (DNS + 2 Tunnels)                                   │
-│  app.tudominio.com    → VPS (frontend Next.js)                  │
-│  stream.tudominio.com → Pi 5 (backend FastAPI)                  │
+│  Cloudflare (DNS + 1 Tunnel)                                    │
+│  app.tudominio.com    → Vercel (CNAME, grey-cloud)              │
+│  stream.tudominio.com → Pi 5 (Cloudflare Tunnel)                │
 └─────────────────────────────────────────────────────────────────┘
          │                                       │
          ▼                                       ▼
 ┌────────────────────────┐         ┌──────────────────────────────┐
-│  VPS pequeño            │         │  Raspberry Pi 5               │
-│  - Next.js 16 (Node)    │         │  - FastAPI + uvicorn          │
+│  Vercel (gratis)        │         │  Raspberry Pi 5               │
+│  - Next.js 16 (CDN)     │         │  - FastAPI + uvicorn          │
 │  - API key YouTube      │         │  - yt-dlp + ffmpeg            │
-│  - Caddy reverse proxy  │         │  - SQLite cache (5h TTL)      │
+│  - HTTPS automático     │         │  - SQLite cache (5h TTL)      │
+│  - Deploy con git push  │         │  - Cookies.txt opcional       │
 │  - NO toca YouTube      │         │  - Passthrough HTTP proxy     │
 │    con yt-dlp           │         │  - IP residencial casera      │
 └────────────────────────┘         └──────────────────────────────┘
@@ -98,9 +124,11 @@ Ver opciones alternativas (self-hosted runner, webhooks, Docker) en [`docs/DEPLO
 
 **Por qué esta arquitectura evita bans de YouTube:**
 - YouTube bloquea IPs de datacenter por reputación antes de mirar cookies/UA
+- Vercel sirve estáticos desde CDN — nunca toca YouTube
 - La Pi tiene IP residencial del ISP → YouTube la trata como usuario normal
 - Cache de 5h → si 100 personas escuchan la misma canción, solo 1 extracción
 - `yt-dlp --sleep-requests 1` + rate limit 250 extracciones/hora (límite YT: 300)
+- Cookies.txt opcional → resuelve "Sign in to confirm you're not a bot"
 - Reverse-proxy preserva IP de la Pi hacia googlevideo (la URL está firmada para esa IP)
 
 ---
@@ -108,8 +136,8 @@ Ver opciones alternativas (self-hosted runner, webhooks, Docker) en [`docs/DEPLO
 ## Estructura del proyecto
 
 ```
-my-project/
-├── src/                          # Frontend Next.js 16
+harmonix-server/
+├── src/                          # Frontend Next.js 16 (deploya en Vercel)
 │   ├── app/
 │   │   ├── layout.tsx            # Layout + ThemeProvider (MD3)
 │   │   ├── page.tsx              # UI principal: búsqueda + player
@@ -121,17 +149,24 @@ my-project/
 │       └── theme-provider.tsx    # Wrapper next-themes
 │
 ├── pi-backend/                   # Backend FastAPI (corre en la Pi)
-│   ├── main.py                   # App FastAPI: cache + yt-dlp + passthrough
+│   ├── main.py                   # App FastAPI: cache + yt-dlp + passthrough + cookies
 │   ├── requirements.txt          # fastapi, uvicorn, httpx, yt-dlp
 │   ├── pi-stream.service         # systemd unit file
-│   └── .env.example
+│   └── .env.example              # incluye USE_COOKIES
 │
-├── deploy/                       # Scripts de instalación
-│   ├── setup-pi.sh               # Instala backend en Pi 5
-│   └── setup-vps.sh              # Instala frontend en VPS
+├── deploy/
+│   └── setup-pi.sh               # Instalador automático backend en Pi
+│
+├── .github/workflows/            # CI/CD
+│   ├── ci.yml
+│   ├── deploy-pi.yml             # SSH deploy a Pi
+│   ├── deploy-vercel.yml         # Verifica build antes de Vercel auto-deploy
+│   └── update-yt-dlp.yml         # Cron semanal
 │
 ├── docs/
-│   └── CLOUDFLARE_TUNNEL.md      # Guía detallada de túneles
+│   ├── VERCEL_DEPLOY.md          # Guía detallada Vercel
+│   ├── CLOUDFLARE_TUNNEL.md      # Guía Cloudflare Tunnel
+│   └── DEPLOYMENT_OPTIONS.md     # Opciones alternativas de CI/CD
 │
 └── .env.example                  # Variables del frontend
 ```
@@ -142,128 +177,74 @@ my-project/
 
 ### Prerrequisitos
 
-- [ ] Raspberry Pi 5 con Raspberry Pi OS (bookworm) + conexión a internet casera
-- [ ] VPS pequeño (1 vCPU, 1GB RAM) con Debian/Ubuntu
-- [ ] Dominio en Cloudflare (DNS mode orange-cloud)
-- [ ] Cuenta de Google Cloud con YouTube Data API v3 habilitada
+- [ ] Raspberry Pi 5 con Raspberry Pi OS + conexión casera a internet
+- [ ] Cuenta de Vercel (gratis, login con GitHub)
+- [ ] Dominio en Cloudflare
+- [ ] YouTube Data API key
 - [ ] Token de Cloudflare Tunnel (Zero Trust → Tunnels)
+- [ ] (Recomendado) cookies.txt de YouTube
 
-### 1. Obtener YouTube Data API key
-
-1. Ve a [Google Cloud Console](https://console.cloud.google.com/)
-2. Crea un proyecto nuevo → habilita **YouTube Data API v3**
-3. Credenciales → Crear API key → copia el valor
-4. **Restricción por IP**: en la config de la key, añade la IP pública del VPS
-
-### 2. Configurar Cloudflare Tunnel (2 túneles)
-
-Sigue la guía detallada en [`docs/CLOUDFLARE_TUNNEL.md`](docs/CLOUDFLARE_TUNNEL.md). Resumen:
-
-- Túnel 1 `vps-tunnel`: `app.tudominio.com` → `http://localhost:80` (VPS)
-- Túnel 2 `pi-tunnel`: `stream.tudominio.com` → `http://localhost:8000` (Pi 5)
-
-### 3. Desplegar frontend en VPS
-
-Copia la carpeta del proyecto al VPS y ejecuta:
+### 1. Instalar backend en la Pi
 
 ```bash
-scp -r my-project/ user@vps:~/
-ssh user@vps
-cd my-project
-bash deploy/setup-vps.sh
-# El script pedirá tu dominio (app.tudominio.com)
+# En la Pi
+bash <(curl -fsSL https://raw.githubusercontent.com/SantiagortegaDev/harmonix-server/main/deploy/setup-pi.sh)
+# Te pedirá: confirmar, pegar cookies.txt (opcional)
 ```
 
-Edita `.env` con tu API key:
-```bash
-nano ~/pi-stream-frontend/.env
-# YOUTUBE_API_KEY=AIza...
-# PI_STREAM_BASE=https://stream.tudominio.com
-sudo systemctl restart pi-stream-frontend
-```
+### 2. Configurar Cloudflare Tunnel para la Pi
 
-### 4. Desplegar backend en Pi 5
+Sigue [`docs/CLOUDFLARE_TUNNEL.md`](docs/CLOUDFLARE_TUNNEL.md). Resumen:
+- Túnel: `pi-tunnel` → `stream.tudominio.com` → `http://localhost:8000`
 
-Copia solo la carpeta `pi-backend/` a la Pi:
+### 3. Deploy frontend en Vercel
 
-```bash
-scp -r my-project/pi-backend/ pi@raspberrypi:~/pi-stream-src
-ssh pi@raspberrypi
-cd ~/pi-stream-src
-bash setup-pi.sh
-# O si copiaste solo pi-backend a ~/pi-stream-src:
-# cp -r pi-backend ~/pi-stream-src && cd ~/pi-stream-src && bash setup-pi.sh
-```
+Sigue [`docs/VERCEL_DEPLOY.md`](docs/VERCEL_DEPLOY.md). Resumen:
+- Importa repo en [vercel.com/new](https://vercel.com/new)
+- Añade env vars: `YOUTUBE_API_KEY`, `PI_STREAM_BASE=https://stream.tudominio.com`
+- Conecta tu dominio `app.tudominio.com`
 
-> Nota: el script `setup-pi.sh` está en `deploy/`, no en `pi-backend/`. Asegúrate de copiarlo también.
-
-### 5. Instalar Cloudflare Tunnel en cada máquina
-
-**En el VPS:**
-```bash
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o /tmp/cf.deb
-sudo dpkg -i /tmp/cf.deb
-sudo cloudflared service install <TOKEN_VPS_TUNNEL>
-```
-
-**En la Pi 5:**
-```bash
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o /tmp/cf.deb
-sudo dpkg -i /tmp/cf.deb
-sudo cloudflared service install <TOKEN_PI_TUNNEL>
-```
-
-### 6. Verificar
+### 4. Verificar
 
 ```bash
-# Frontend
-curl https://app.tudominio.com/
-
-# Backend
-curl https://stream.tudominio.com/health
+curl https://app.tudominio.com/                    # frontend
+curl https://stream.tudominio.com/health           # backend
 ```
 
-Abre `https://app.tudominio.com/` en el navegador, busca una canción, click → debe sonar en menos de 3 segundos.
+Abre `https://app.tudominio.com/` en el navegador, busca una canción → debe sonar en <3s.
 
 ---
 
 ## Decisiones técnicas
 
-### ¿Por qué el frontend NO habla directo con YouTube Music?
+### ¿Por qué Vercel y no VPS para el frontend?
 
-La API pública de YouTube Data v3 es solo para **metadata** (búsqueda, títulos, thumbnails). Para obtener el audio hay que extraer la URL firmada del `videoplayback` endpoint, y esa URL está:
+- **Costo**: Vercel es gratis para tráfico normal (100GB/mes)
+- **Performance**: CDN con 28 regiones globales, mucho mejor que 1 VPS en 1 región
+- **Mantenimiento cero**: HTTPS automático, deploy con `git push`, sin systemd
+- **Ban risk**: Vercel no toca YouTube — solo sirve estáticos. Cero riesgo
+- **Escala**: Si tu app se vuelve viral, Vercel aguenta sin que tengas que tocar nada
 
-1. **Atada a la IP del extractor** → si el VPS la pide y el navegador la reproduce, falla
-2. **Caduca en 6h** → hay que cachearla y renovarla
+### ¿Por qué la Pi y no Vercel para el backend?
 
-Por eso el backend de la Pi hace de **proxy transparente**: el navegador pide a la Pi, la Pi reenvía a googlevideo preservando su propia IP.
+- `yt-dlp` necesita Python y subprocess — Vercel serverless tiene 10s timeout
+- La URL firmada de YouTube está **ligada a la IP del extractor** → necesitas IP fija (Pi)
+- Cache SQLite persistente — Vercel serverless es stateless
+- IP residencial de la Pi = alta confianza en YouTube
 
-### ¿Por qué la Pi y no el VPS para extraer?
+### ¿Por qué cookies.txt opcional?
 
-YouTube bloquea IPs de datacenter por reputación. La Pi tiene IP residencial del ISP (alta confianza en YouTube). El VPS solo sirve HTML/JS estático — nunca toca `youtube.com` o `googlevideo.com`.
+Sin cookies funciona para la mayoría de videos, pero YouTube a veces pide verificación. Con cookies:
+- Resuelves `Sign in to confirm you're not a bot`
+- Accedes a videos con restricción de edad
+- Sube el rate limit a ~2000/hora (vs 300 sin cookies)
+- Recomendado para uso intensivo
+
+**Importante**: usa cuenta secundaria por si la banean. Nunca tu cuenta principal.
 
 ### ¿Por qué cache de 5h?
 
-Las URLs firmadas de YouTube duran ~6h. Cachear 5h deja margen de seguridad. Si 100 oyentes escuchan la misma canción en ese rango, hacemos **1 sola extracción** en lugar de 100 — esto es lo que evita el ban.
-
-### ¿Por qué `--sleep-requests 1` y no más agresivo?
-
-YouTube limita a ~300 extracciones/hora por IP invitada. Nos quedamos en 250 para tener margen. Con cache activa, rara vez llegamos al límite en una Pi casera.
-
-### ¿Por qué `player_client=mweb`?
-
-El cliente mobile-web de YouTube tiene menos validaciones que `web` o `android`. Es el más estable cuando no usas PO Token. Sacrificas formatos 1080p+ (que no necesitamos para audio).
-
-### ¿Por qué Caddy y no nginx?
-
-Caddy hace HTTPS automático con Let's Encrypt sin configuración. Para un VPS pequeño donde solo necesitas reverse proxy hacia Next.js, Caddy es 5 líneas de config vs 50 de nginx.
-
-### ¿Por qué FastAPI y no Express/Node?
-
-`yt-dlp` es Python. Llamarlo desde Python con `subprocess` es natural. FastAPI además:
-- Async nativo → el passthrough HTTP no bloquea el event loop
-- StreamingResponse → ideal para reenviar bytes de googlevideo
-- SQLite estándar de Python, sin dependencias externas
+Las URLs firmadas de YouTube duran ~6h. Cachear 5h deja margen. Si 100 oyentes escuchan la misma canción en ese rango, hacemos **1 sola extracción** en lugar de 100.
 
 ---
 
@@ -272,15 +253,23 @@ Caddy hace HTTPS automático con Let's Encrypt sin configuración. Para un VPS p
 ### Logs
 
 ```bash
-# VPS — frontend
-sudo journalctl -u pi-stream-frontend -f
-
 # Pi 5 — backend
 sudo journalctl -u pi-stream -f
 tail -f ~/pi-stream/stream.log
 
 # Pi 5 — cloudflared
 sudo journalctl -u cloudflared -f
+
+# Vercel — frontend
+# Dashboard → tu proyecto → Logs (en vivo)
+```
+
+### Actualizar cookies.txt
+
+```bash
+# Subir nuevas cookies
+scp cookies.txt pi@tu-pi:~/pi-stream/cookies.txt
+ssh pi@tu-pi "sudo systemctl restart pi-stream"
 ```
 
 ### Cache DB
@@ -289,38 +278,24 @@ sudo journalctl -u cloudflared -f
 # Ver entradas activas
 sqlite3 ~/pi-stream/cache.db "SELECT video_id, quality, datetime(created_ts,'unixepoch') as created, datetime(expire_ts,'unixepoch') as expires, hits FROM stream_cache WHERE expire_ts > strftime('%s','now') ORDER BY hits DESC LIMIT 20;"
 
-# Limpiar expiradas (lo hace automáticamente, pero por si acaso)
+# Limpiar expiradas
 sqlite3 ~/pi-stream/cache.db "DELETE FROM stream_cache WHERE expire_ts < strftime('%s','now');"
 
 # Invalidar una entrada específica
 curl -X POST https://stream.tudominio.com/cache/expire -d "video_id=XXX" -d "quality=auto"
 ```
 
-### Actualizar yt-dlp
-
-YouTube cambia su API frecuentemente. yt-dlp publica fixes cada semana. Actualiza:
+### Actualizar yt-dlp manualmente
 
 ```bash
-ssh pi@raspberrypi
+ssh pi@tu-pi
 cd ~/pi-stream
 source venv/bin/activate
 pip install --upgrade yt-dlp
 sudo systemctl restart pi-stream
 ```
 
-Recomendado: cron semanal:
-```bash
-# crontab -e
-0 4 * * 1 /home/pi/pi-stream/venv/bin/pip install --upgrade yt-dlp --quiet && /usr/bin/sudo /bin/systemctl restart pi-stream
-```
-
-### Backups
-
-Solo necesitas backupear:
-- `~/pi-stream/.env` (configuración)
-- Código fuente (en git)
-
-El `cache.db` se regenera solo. Los logs rotan con logrotate automáticamente.
+> El cron semanal (`update-yt-dlp.yml`) ya hace esto automáticamente cada lunes.
 
 ---
 
@@ -328,34 +303,30 @@ El `cache.db` se regenera solo. Los logs rotan con logrotate automáticamente.
 
 ### "Sign in to confirm you're not a bot"
 
-YouTube está pidiendo captcha. Causas:
-- Rate limit alcanzado (revisa `extractions_last_hour` en `/health`)
-- IP residencial marcada (raro pero posible tras pico de uso)
+YouTube pide captcha. Causas:
+- Sin cookies → instálalas (ver sección 🍪 arriba)
+- Rate limit alcanzado → revisa `extractions_last_hour` en `/health`
+- IP marcada → para el servicio 1h y reintenta
 
-Solución temporal: para el servicio 1h, deja que se enfríe la IP. Si persiste, considera sumar otro extractor (Termux en celular con LTE).
-
-### El audio no carga pero la búsqueda sí funciona
+### El audio no carga pero la búsqueda funciona
 
 - Verifica `https://stream.tudominio.com/health` responde 200
-- Verifica que `PI_STREAM_BASE` en el `.env` del frontend apunta al subdominio correcto
-- Verifica que el Cloudflare Tunnel de la Pi está online (Zero Trust → Tunnels → status)
+- Verifica `PI_STREAM_BASE` en Vercel env vars
+- Verifica Cloudflare Tunnel de la Pi online (Zero Trust → Tunnels → status)
 - Revisa `~/pi-stream/stream.log` en la Pi
 
 ### Latencia alta (>3s)
 
-Posibles causas:
-- Cache miss + `--sleep-requests 1` se está esperando → normal la primera vez
-- Pi sobrecargada (CPU >80%) → reduce workers en `pi-stream.service`
+- Cache miss + `--sleep-requests 1` esperando → normal la primera vez
+- Pi sobrecargada → reduce workers en `pi-stream.service`
 - Cloudflare Tunnel congestionado → revisa `cloudflared` logs
 
 ### yt-dlp se queja de formato no disponible
 
-Algunos videos no tienen `bestaudio` separado. El fallback `bestaudio/best` debería manejarlo, pero si falla:
+Algunos videos no tienen `bestaudio` separado. El fallback `bestaudio/best` debería manejarlo. Si falla:
 ```bash
 yt-dlp -F "https://youtu.be/VIDEO_ID"  # lista formatos disponibles
 ```
-
-Ajusta el formato en `YTDLP_BASE_ARGS` de `main.py` si necesitas algo específico.
 
 ---
 
@@ -363,19 +334,19 @@ Ajusta el formato en `YTDLP_BASE_ARGS` de `main.py` si necesitas algo específic
 
 | Recurso | Costo mensual |
 |---------|---------------|
-| VPS pequeño (Hetzner CX22, Contabo VPS S, OVH VPS Starter) | ~$4-5 |
+| Vercel (free tier) | $0 |
 | Cloudflare Tunnel + DNS | $0 |
 | YouTube Data API v3 (10k cuota/día) | $0 |
 | Pi 5 (one-time) | ya la tienes |
-| Dominio (si no tienes) | ~$10/año |
-| **Total** | **~$5/mes** |
+| Dominio | ~$10/año |
+| **Total** | **~$0.83/mes** (solo dominio) |
 
 ---
 
 ## Limitaciones conocidas
 
 - **No descarga de videos**, solo audio en streaming
-- **No reproduce playlists** automáticamente (puedes añadirlo al frontend)
+- **No reproduce playlists** automáticamente
 - **No busca en YouTube Music Premium** (solo catálogo gratuito)
 - **Calidad limitada a `bestaudio`** (no 1080p+ porque requiere PO Token)
 - **Una sola IP residencial** — si necesitas más capacidad, añade nodos (Termux LTE, segunda casa)
@@ -384,9 +355,9 @@ Ajusta el formato en `YTDLP_BASE_ARGS` de `main.py` si necesitas algo específic
 
 ## Próximos pasos sugeridos
 
-1. **Monitoreo**: añade UptimeRobot o Better Stack monitorizando `/health` de la Pi
-2. **Pre-warming opcional**: cuando alguien busca, el backend podría pre-extraer las primeras 3 canciones
-3. **Historial de reproducción**: tabla SQLite en el frontend con Prisma
-4. **Favoritos**: añadir botón ♡ que guarda en localStorage o cuenta
-5. **Modo radio**: autoplay de canciones similares tras la actual
+1. **Monitoreo**: UptimeRobot monitorizando `/health` de la Pi
+2. **Pre-warming**: cuando alguien busca, pre-extraer las primeras 3 canciones
+3. **Historial de reproducción**: tabla SQLite en Vercel con Prisma
+4. **Favoritos**: botón ♡ que guarda en localStorage
+5. **Modo radio**: autoplay de canciones similares
 6. **Multi-extractor**: sumar Termux en tu celular como segundo nodo del pool
