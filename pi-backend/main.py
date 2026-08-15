@@ -99,10 +99,10 @@ elif USE_COOKIES and not COOKIES_PATH.exists():
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_PATH),
-    ],
+    # Solo StreamHandler: systemd ya manda stdout/stderr a stream.log
+    # via StandardOutput=append:stream.log. Si añadimos FileHandler,
+    # cada linea se duplica en el archivo.
+    handlers=[logging.StreamHandler()],
 )
 log = logging.getLogger("pi-stream")
 
@@ -210,17 +210,18 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Map quality → formato yt-dlp
-    # IMPORTANTE: NO usar /best como fallback. Si el video no tiene bestaudio
-    # (caso raro), mejor que falle con error claro y no que devuelva un stream
-    # combinado video+audio que es más inestable y pesado.
+    # Permitir fallback a /best porque el cliente android NO siempre
+    # devuelve bestaudio para todos los videos. En esos casos, caer al
+    # formato combinado (itag=18 = 360p mp4 con audio) es mejor que nada.
+    # El navegador solo reproduce el audio del mp4 igual.
     if quality == "best":
-        fmt = "bestaudio"
+        fmt = "bestaudio/best"
     elif quality == "128":
-        fmt = "bestaudio[abr<=128]/bestaudio"
+        fmt = "bestaudio[abr<=128]/bestaudio/best"
     elif quality == "192":
-        fmt = "bestaudio"
+        fmt = "bestaudio/best"
     else:  # auto
-        fmt = "bestaudio"
+        fmt = "bestaudio/best"
 
     args = YTDLP_BASE_ARGS + ["-f", fmt, url]
 
@@ -261,6 +262,29 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
     if proc.returncode != 0:
         err = stderr.decode(errors="ignore").strip()
         log.error(f"[extract] yt-dlp failed rc={proc.returncode}: {err[:300]}")
+
+        # DEBUG: si el error es de formato, listar los formatos disponibles
+        # para que veamos qué tiene el video y podamos ajustar el -f
+        if "format" in err.lower() or "not available" in err.lower():
+            log.info("[extract] Listando formatos disponibles para debug:")
+            try:
+                list_args = [YTDLP_BIN, "--list-formats", url]
+                if "--cookies" in YTDLP_BASE_ARGS:
+                    idx = YTDLP_BASE_ARGS.index("--cookies")
+                    list_args += ["--cookies", YTDLP_BASE_ARGS[idx + 1]]
+                list_args += ["--extractor-args", "youtube:player_client=android,web"]
+                list_proc = await asyncio.create_subprocess_exec(
+                    *list_args,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                list_stdout, _ = await asyncio.wait_for(list_proc.communicate(), timeout=30)
+                list_text = list_stdout.decode(errors="ignore").strip()
+                for line in list_text.splitlines():
+                    log.info(f"[formats] {line}")
+            except Exception as e:
+                log.error(f"[extract] no se pudo listar formatos: {e}")
+
         if "Sign in to confirm" in err or "age" in err.lower():
             raise HTTPException(status_code=403, detail="YouTube requiere verificación (IP bajo sospecha)")
         raise HTTPException(status_code=502, detail=f"yt-dlp error: {err[:200]}")
