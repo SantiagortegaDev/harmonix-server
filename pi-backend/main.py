@@ -79,16 +79,23 @@ YTDLP_BASE_ARGS = [
     "--sleep-requests", "1",                 # 1s entre requests (suave)
     "--sleep-interval", "1",
     "--max-sleep-interval", "3",
-    # Múltiples player clients en orden de prioridad.
-    # Razón de cada uno:
-    # - android_music: cliente YouTube Music Android → devuelve bestaudio
-    #   (itag 140 m4a / 251 webm) sin PO token. Ideal.
-    # - ios: cliente iOS → a veces devuelve audio-only sin PO token.
-    # - android: cliente Android genérico → devuelve itag=18 video+audio.
-    #   No es ideal pero el navegador reproduce el audio del mp4 igual.
-    # - web: cliente web browser → requiere PO token para audio/video.
-    #   Sin PO token solo entrega storyboards (imágenes). Último recurso.
-    "--extractor-args", "youtube:player_client=android_music,ios,android,web",
+    # IMPORTANTE 2025+: YouTube ahora exige PO Token (Proof of Origin)
+    # para la mayoría de player clients. Sin PO Token, solo devuelve
+    # storyboards (imágenes), no audio/video.
+    #
+    # Clientes que NO requieren PO Token (según wiki yt-dlp oficial):
+    #   - tv: NO requiere PO Token, pero formatos pueden tener DRM
+    #         en algunos casos. Funciona sin cookies.
+    #   - android_vr: NO requiere PO Token. Funciona sin cookies.
+    #                  "Made for kids" no disponible.
+    #
+    # Clientes que SÍ requieren PO Token (sin plugin, fallan):
+    #   - web, mweb, android, ios, web_music, web_creator, web_embedded
+    #
+    # Orden: tv primero (más formatos), android_vr como fallback.
+    # Si ambos fallan, el plugin bgutil-pot-provider (si está instalado)
+    # generará PO Token automáticamente para los demás clientes.
+    "--extractor-args", "youtube:player_client=tv,android_vr,android,web",
 ]
 
 # Añadir --cookies si está activado y el archivo existe
@@ -282,7 +289,7 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
                 if "--cookies" in YTDLP_BASE_ARGS:
                     idx = YTDLP_BASE_ARGS.index("--cookies")
                     list_args += ["--cookies", YTDLP_BASE_ARGS[idx + 1]]
-                list_args += ["--extractor-args", "youtube:player_client=android_music,ios,android,web"]
+                list_args += ["--extractor-args", "youtube:player_client=tv,android_vr,android,web"]
                 list_proc = await asyncio.create_subprocess_exec(
                     *list_args,
                     stdout=asyncio.subprocess.PIPE,
