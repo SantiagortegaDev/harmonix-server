@@ -1,0 +1,67 @@
+# ============================================================
+# Workflow: Auto-actualizar yt-dlp (cron semanal)
+#
+# YouTube cambia su API frecuentemente. yt-dlp publica fixes
+# cada semana. Este workflow actualiza yt-dlp en la Pi
+# automáticamente todos los lunes a las 04:00 UTC.
+#
+# También puede dispararse manualmente desde Actions tab.
+# ============================================================
+
+name: Update yt-dlp on Pi
+
+on:
+  schedule:
+    # Lunes 04:00 UTC (puede variar según TZ de la Pi)
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+jobs:
+  update-ytdlp:
+    name: Update yt-dlp on Pi
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -p ${{ secrets.PI_SSH_PORT || 22 }} -H ${{ secrets.PI_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Update yt-dlp + restart
+        run: |
+          ssh -i ~/.ssh/key -p ${{ secrets.PI_SSH_PORT || 22 }} \
+            ${{ secrets.PI_USER }}@${{ secrets.PI_HOST }} << 'EOF'
+            set -euo pipefail
+            cd ~/pi-stream
+            source venv/bin/activate
+            OLD_VER=$(yt-dlp --version)
+            pip install --upgrade yt-dlp --quiet
+            NEW_VER=$(yt-dlp --version)
+            echo "yt-dlp: $OLD_VER → $NEW_VER"
+            # Test que sigue funcionando
+            TEST_URL=$(yt-dlp -g -f bestaudio --no-warnings \
+              --extractor-args "youtube:player_client=mweb" \
+              "https://www.youtube.com/watch?v=dQw4w9WgXcQ" 2>&1 || true)
+            if [[ "$TEST_URL" =~ ^https:// ]]; then
+              echo "✓ yt-dlp funciona correctamente"
+              sudo systemctl restart pi-stream
+            else
+              echo "✗ yt-dlp falló tras actualización:"
+              echo "$TEST_URL" | head -5
+              # Rollback si falla
+              pip install "yt-dlp==$OLD_VER" --quiet
+              echo "Rollback a $OLD_VER"
+              sudo systemctl restart pi-stream
+              exit 1
+            fi
+          EOF
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Falló la actualización de yt-dlp. Revisa los logs."
+          echo "Posible causa: YouTube cambió algo y yt-dlp no ha publicado fix todavía."
+          echo "Solución: espera unas horas a que yt-dlp publique nueva versión."

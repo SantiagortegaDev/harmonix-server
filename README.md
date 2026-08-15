@@ -15,6 +15,61 @@ Usuario → app.tudominio.com (VPS) → YouTube Data API v3 (búsqueda)
 
 ---
 
+## 🚀 Instalación con una sola línea
+
+El script detecta automáticamente si estás en una Pi (ARM) o un VPS (x86_64) e instala lo que corresponda:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/SantiagortegaDev/harmonix-server/main/install.sh)
+```
+
+**En la Raspberry Pi 5** instala: Python venv, FastAPI, yt-dlp, ffmpeg, SQLite, systemd service.
+
+**En el VPS** instala: Node.js 22, bun, Next.js build, Caddy reverse proxy, systemd service.
+
+> Requiere: usuario con sudo, conexión a internet. El script pedirá confirmación antes de instalar.
+
+---
+
+## 🔄 Deployment automático con GitHub Actions
+
+Ya tienes 4 workflows listos en `.github/workflows/`:
+
+| Workflow | Trigger | Qué hace |
+|----------|---------|----------|
+| `ci.yml` | push/PR a main | Lint + build check (no deploya) |
+| `deploy-pi.yml` | push a main (cambios en `pi-backend/`) | SSH a Pi, `git pull`, restart systemd |
+| `deploy-vps.yml` | push a main (cambios en `src/`) | SSH a VPS, `bun install`, rebuild, restart |
+| `update-yt-dlp.yml` | cron semanal (lunes 04:00 UTC) | Actualiza yt-dlp en la Pi + smoke test |
+
+### Setup de secrets (5 minutos)
+
+1. **Genera SSH keys dedicadas** en tu PC:
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/harmonix_pi -N ""
+   ssh-keygen -t ed25519 -f ~/.ssh/harmonix_vps -N ""
+   ```
+
+2. **Copia la public key a cada máquina**:
+   ```bash
+   ssh-copy-id -i ~/.ssh/harmonix_pi.pub pi@tu-pi
+   ssh-copy-id -i ~/.ssh/harmonix_vps.pub user@tu-vps
+   ```
+
+3. **Añade estos secrets** en `Settings → Secrets and variables → Actions`:
+   - `PI_HOST`, `PI_USER`, `PI_SSH_KEY`, `PI_SSH_PORT`
+   - `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_SSH_PORT`
+   - `MAIN_DOMAIN` (ej: `tudominio.com`)
+
+4. **Push a main** y se deploya solo:
+   ```bash
+   git push origin main
+   ```
+
+Ver opciones alternativas (self-hosted runner, webhooks, Docker) en [`docs/DEPLOYMENT_OPTIONS.md`](docs/DEPLOYMENT_OPTIONS.md).
+
+---
+
 ## Arquitectura
 
 ```

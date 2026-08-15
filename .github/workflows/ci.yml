@@ -1,0 +1,63 @@
+# ============================================================
+# Workflow: CI — Lint + Build check en cada PR/push
+#
+# Verifica que el frontend compile y el backend no tenga
+# errores de sintaxis antes de mergear.
+# ============================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  frontend-check:
+    name: Frontend lint + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Build check (no deploya)
+        run: bun run build
+        env:
+          # Dummy values para que el build no falle por .env vacío
+          YOUTUBE_API_KEY: dummy
+          PI_STREAM_BASE: https://dummy.example.com
+
+  backend-check:
+    name: Backend Python syntax check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Syntax check
+        run: |
+          python -m py_compile pi-backend/main.py
+          echo "✓ main.py compila sin errores"
+
+      - name: Install deps + import test
+        run: |
+          pip install -r pi-backend/requirements.txt
+          cd pi-backend
+          python -c "import main; print('✓ main.py imports OK')"

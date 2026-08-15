@@ -1,54 +1,96 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# ============================================================
+# .gitignore — Pi Stream
+# ============================================================
 
-# dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+# --- Node / Next.js ---
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+.vercel
+bun.lockb
 
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
-*.pem
-
-# debug
+# --- Logs ---
+*.log
+dev.log
+server.log
+stream.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# --- Environment ---
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+pi-backend/.env
+.env.example.local
 
-# vercel
-.vercel
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+*.egg-info/
+.pytest_cache/
 
+# --- Database / Cache ---
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+pi-backend/cache.db
+pi-backend/cache.db-journal
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
-*.log
-dev.log
-dev.out.log
-test
-prompt
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
 
-server.log
-# Skills directory
-/skills/
+# --- IDE ---
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.atom/
+
+# --- Cloudflared / Secrets ---
+cloudflared/
+*.pem
+*.key
+*.crt
+credentials.json
+service-account.json
+
+# --- Build artifacts ---
+*.tar.gz
+*.zip
+download/screenshot-*.png
+
+# --- Misc ---
+.cache/
+.turbo/
+.eslintcache
+
+# --- Z.ai sandbox internals (no subir al repo) ---
+skills/
+.zscripts/
+tests/
+examples/
+db/
+download/

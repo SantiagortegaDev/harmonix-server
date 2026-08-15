@@ -1,0 +1,87 @@
+# ============================================================
+# Workflow: Deploy a Raspberry Pi 5 vía SSH
+#
+# Cuando haces push a `main`, este workflow:
+#   1. Hace SSH a la Pi por el túnel de Cloudflare (o IP directa)
+#   2. Hace git pull en ~/pi-stream-src
+#   3. Reinicia el servicio systemd
+#
+# REQUIERE configurar estos secrets en GitHub:
+#   PI_HOST       — hostname o IP de la Pi (ej: stream.tudominio.com)
+#   PI_USER       — usuario SSH (ej: pi)
+#   PI_SSH_KEY    — private key SSH (cat ~/.ssh/id_ed25519)
+#   PI_SSH_PORT   — puerto SSH (default: 22)
+#
+# Para generar una key dedicada:
+#   ssh-keygen -t ed25519 -f ~/.ssh/harmonix_pi -C "github-actions-pi"
+#   ssh-copy-id -i ~/.ssh/harmonix_pi.pub pi@tu-pi
+#   # copiar contenido de ~/.ssh/harmonix_pi (private) a GitHub secret PI_SSH_KEY
+# ============================================================
+
+name: Deploy to Pi
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pi-backend/**'
+      - 'deploy/setup-pi.sh'
+      - 'install.sh'
+  workflow_dispatch: # permite ejecutarlo manualmente
+
+jobs:
+  deploy-pi:
+    name: Deploy backend to Pi
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/key
+          chmod 600 ~/.ssh/key
+          ssh-keyscan -p ${{ secrets.PI_SSH_PORT || 22 }} -H ${{ secrets.PI_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Deploy via SSH
+        run: |
+          ssh -i ~/.ssh/key -p ${{ secrets.PI_SSH_PORT || 22 }} \
+            ${{ secrets.PI_USER }}@${{ secrets.PI_HOST }} << 'EOF'
+            set -euo pipefail
+            cd ~/pi-stream-src 2>/dev/null || {
+              echo "Repo no clonado en Pi, clonando…"
+              git clone --depth 1 https://github.com/SantiagortegaDev/harmonix-server ~/pi-stream-src
+              cd ~/pi-stream-src
+            }
+            git fetch --all
+            git reset --hard origin/main
+            # Re-instalar dependencias Python si cambiaron
+            cd ~/pi-stream
+            if ! diff -q ~/pi-stream-src/pi-backend/requirements.txt requirements.txt >/dev/null 2>&1; then
+              echo "requirements.txt cambió, actualizando…"
+              cp ~/pi-stream-src/pi-backend/requirements.txt .
+              source venv/bin/activate
+              pip install -r requirements.txt --quiet
+              pip install --upgrade yt-dlp --quiet
+            fi
+            # Copiar main.py actualizado
+            cp ~/pi-stream-src/pi-backend/main.py .
+            cp ~/pi-stream-src/pi-backend/pi-stream.service . 2>/dev/null || true
+            sudo systemctl restart pi-stream
+            sleep 2
+            sudo systemctl is-active --quiet pi-stream && echo "✓ pi-stream restarted OK" || {
+              echo "✗ pi-stream failed to start"
+              sudo journalctl -u pi-stream -n 20 --no-pager
+              exit 1
+            }
+          EOF
+
+      - name: Health check
+        run: |
+          sleep 3
+          curl -fsS https://stream.${{ secrets.MAIN_DOMAIN }}/health || \
+            curl -fsS http://${{ secrets.PI_HOST }}:8000/health || \
+            { echo "Health check failed"; exit 1; }
