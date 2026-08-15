@@ -375,7 +375,10 @@ async def stream(
     Cache hit: <50ms. Cache miss: 1-2s (yt-dlp).
     """
     # Validar formato del video_id
-    if not video_id or len(video_id) > 16 or not video_id.isalnum():
+    # YouTube usa IDs de 11 caracteres en base64url: [A-Za-z0-9_-]
+    # (NO usar .isalnum() porque rechaza '-' y '_' que son válidos)
+    import re
+    if not video_id or not re.match(r"^[A-Za-z0-9_-]{6,16}$", video_id):
         raise HTTPException(status_code=400, detail="video_id inválido")
 
     range_header = request.headers.get("range")
