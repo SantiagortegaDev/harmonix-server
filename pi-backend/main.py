@@ -210,16 +210,17 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     # Map quality → formato yt-dlp
+    # IMPORTANTE: NO usar /best como fallback. Si el video no tiene bestaudio
+    # (caso raro), mejor que falle con error claro y no que devuelva un stream
+    # combinado video+audio que es más inestable y pesado.
     if quality == "best":
-        fmt = "bestaudio/best"
+        fmt = "bestaudio"
     elif quality == "128":
-        fmt = "bestaudio[abr<=128]/bestaudio/best"
+        fmt = "bestaudio[abr<=128]/bestaudio"
     elif quality == "192":
-        # Para 192 necesitamos re-codificar → lo dejamos para el passthrough ffmpeg
-        # Aquí extraemos bestaudio, el reencode va en el proxy
-        fmt = "bestaudio/best"
+        fmt = "bestaudio"
     else:  # auto
-        fmt = "bestaudio/best"
+        fmt = "bestaudio"
 
     args = YTDLP_BASE_ARGS + ["-f", fmt, url]
 
@@ -335,7 +336,14 @@ async def stream_passthrough(upstream_url: str, range_header: Optional[str]):
                 "Content-Type": upstream.headers.get("content-type", "audio/mpeg"),
                 "Cache-Control": "public, max-age=3600",
             }
-            if "content-length" in upstream.headers:
+            # Para 206 Partial Content, NO pasar Content-Length al cliente.
+            # Razón: si el stream upstream se corta a mitad (ReadError),
+            # starlette/uvicorn lanza 'Response content shorter than
+            # Content-Length' porque ya habíamos prometido N bytes.
+            # Sin Content-Length, uvicorn usa Transfer-Encoding: chunked
+            # y el stream puede terminar 'naturalmente' sin error.
+            # El navegador igual puede hacer seek via Range requests.
+            if upstream.status_code == 200 and "content-length" in upstream.headers:
                 pass_headers["Content-Length"] = upstream.headers["content-length"]
             if "content-range" in upstream.headers:
                 pass_headers["Content-Range"] = upstream.headers["content-range"]
