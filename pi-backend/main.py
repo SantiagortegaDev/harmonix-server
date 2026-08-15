@@ -55,9 +55,22 @@ ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 USE_COOKIES = os.getenv("USE_COOKIES", "false").lower() == "true"
 COOKIES_PATH = BASE_DIR / "cookies.txt"
 
+# yt-dlp binario — resolver ruta absoluta al venv local.
+# Esto es CRÍTICO porque systemd ejecuta uvicorn directamente
+# (sin 'source venv/bin/activate'), por lo que el PATH del proceso
+# no incluye venv/bin. Si dejamos solo "yt-dlp", create_subprocess_exec
+# lanza FileNotFoundError → "Error ejecutando yt-dlp".
+import shutil
+_VENV_YTDLP = BASE_DIR / "venv" / "bin" / "yt-dlp"
+if _VENV_YTDLP.exists():
+    YTDLP_BIN = str(_VENV_YTDLP)
+else:
+    _SYS_YTDLP = shutil.which("yt-dlp")
+    YTDLP_BIN = _SYS_YTDLP or "yt-dlp"  # fallback al nombre, dejar que falle con mensaje claro
+
 # yt-dlp flags compartidos
 YTDLP_BASE_ARGS = [
-    "yt-dlp",
+    YTDLP_BIN,                                # ruta absoluta al binario del venv
     "-g",                                    # solo imprimir URL
     "--no-warnings",
     "--no-playlist",
@@ -223,9 +236,15 @@ async def extract_stream_url(video_id: str, quality: str) -> dict:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="yt-dlp timeout (¿IP baneada?)")
+    except FileNotFoundError as e:
+        log.error(f"[extract] yt-dlp binario no encontrado: {YTDLP_BIN}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"yt-dlp no encontrado en '{YTDLP_BIN}'. Reinstala el venv o verifica la ruta.",
+        )
     except Exception as e:
-        log.error(f"[extract] subprocess error: {e}")
-        raise HTTPException(status_code=500, detail="Error ejecutando yt-dlp")
+        log.error(f"[extract] subprocess error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error ejecutando yt-dlp: {type(e).__name__}: {e}")
 
     if proc.returncode != 0:
         err = stderr.decode(errors="ignore").strip()
