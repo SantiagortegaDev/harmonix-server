@@ -321,80 +321,112 @@ async def stream_passthrough(upstream_url: str, range_header: Optional[str]):
     Hace streaming HTTP del upstream (googlevideo) hacia el cliente.
     Soporta HTTP Range para que <audio> pueda seek.
     """
+    # Headers críticos para googlevideo:
+    # - Accept-Encoding: identity → sin compression. httpx + h2 + gzip
+    #   rompe el stream con ReadError silencioso en chunked.
+    # - Connection: keep-alive → reutilizar conexión para próximos Range.
     headers = {}
     if range_header:
         headers["Range"] = range_header
-    # UA mínimo para no levantar sospechas
     headers["User-Agent"] = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    headers["Accept-Encoding"] = "identity"
+    headers["Accept"] = "*/*"
+    headers["Connection"] = "keep-alive"
 
-    async with httpx.AsyncClient(
+    # NO usar follow_redirects=True porque httpx pierde el stream en
+    # redirects 302 de googlevideo (rr1→rr4). Resolver manualmente.
+    client = httpx.AsyncClient(
         timeout=httpx.Timeout(60.0, connect=15.0),
-        follow_redirects=True,
+        follow_redirects=False,
         limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-    ) as client:
-        try:
-            req = client.build_request("GET", upstream_url, headers=headers)
+        # Forzar HTTP/1.1. httpx con HTTP/2 + streaming + Range tiene
+        # bugs que producen ReadError silencioso.
+        http2=False,
+        verify=True,
+    )
+
+    try:
+        # Resolver redirects manualmente hasta llegar al 200/206
+        current_url = upstream_url
+        upstream = None
+        for _ in range(5):  # máx 5 redirects
+            req = client.build_request("GET", current_url, headers=headers)
             upstream = await client.send(req, stream=True)
-        except httpx.ConnectError as e:
-            log.error(f"[passthrough] connect error: {e}")
-            raise HTTPException(status_code=502, detail=f"No se pudo conectar a googlevideo: {e}")
-        except httpx.ReadTimeout as e:
-            log.error(f"[passthrough] read timeout: {e}")
-            raise HTTPException(status_code=504, detail="googlevideo timeout")
-        except Exception as e:
-            log.error(f"[passthrough] error: {type(e).__name__}: {e}")
-            raise HTTPException(status_code=502, detail=f"Passthrough error: {type(e).__name__}")
-
-        try:
-            if upstream.status_code >= 400:
-                body = await upstream.aread()
-                log.warning(f"[passthrough] upstream {upstream.status_code}: {body[:200]}")
+            if upstream.status_code in (301, 302, 303, 307, 308):
+                location = upstream.headers.get("location", "")
                 await upstream.aclose()
-                raise HTTPException(status_code=upstream.status_code, detail="Upstream error")
+                if not location:
+                    raise HTTPException(status_code=502, detail="Redirect sin Location")
+                log.info(f"[passthrough] redirect {upstream.status_code} → {location[:80]}")
+                current_url = location
+                continue
+            break
+        else:
+            if upstream:
+                await upstream.aclose()
+            raise HTTPException(status_code=502, detail="Demasiados redirects")
 
-            log.info(f"[passthrough] upstream {upstream.status_code} content-type={upstream.headers.get('content-type')} len={upstream.headers.get('content-length', '?')}")
-
-            # Headers que pasamos al cliente
-            pass_headers = {
-                "Accept-Ranges": "bytes",
-                "Content-Type": upstream.headers.get("content-type", "audio/mpeg"),
-                "Cache-Control": "public, max-age=3600",
-            }
-            # Para 206 Partial Content, NO pasar Content-Length al cliente.
-            # Razón: si el stream upstream se corta a mitad (ReadError),
-            # starlette/uvicorn lanza 'Response content shorter than
-            # Content-Length' porque ya habíamos prometido N bytes.
-            # Sin Content-Length, uvicorn usa Transfer-Encoding: chunked
-            # y el stream puede terminar 'naturalmente' sin error.
-            # El navegador igual puede hacer seek via Range requests.
-            if upstream.status_code == 200 and "content-length" in upstream.headers:
-                pass_headers["Content-Length"] = upstream.headers["content-length"]
-            if "content-range" in upstream.headers:
-                pass_headers["Content-Range"] = upstream.headers["content-range"]
-
-            status = upstream.status_code
-
-            async def gen():
-                try:
-                    async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
-                        yield chunk
-                except Exception as e:
-                    log.error(f"[passthrough] stream error: {type(e).__name__}: {e}")
-                finally:
-                    await upstream.aclose()
-
-            return StreamingResponse(
-                gen(),
-                status_code=status,
-                headers=pass_headers,
-                media_type=pass_headers["Content-Type"],
-            )
-        except HTTPException:
-            raise
-        except Exception as e:
-            log.error(f"[passthrough] setup error: {type(e).__name__}: {e}")
+        if upstream.status_code >= 400:
+            body = await upstream.aread()
+            log.warning(f"[passthrough] upstream {upstream.status_code}: {body[:200]}")
             await upstream.aclose()
-            raise HTTPException(status_code=500, detail=f"Passthrough setup: {type(e).__name__}")
+            await client.aclose()
+            raise HTTPException(status_code=upstream.status_code, detail="Upstream error")
+
+        log.info(f"[passthrough] upstream {upstream.status_code} content-type={upstream.headers.get('content-type')} len={upstream.headers.get('content-length', '?')}")
+
+        # Headers que pasamos al cliente
+        pass_headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Type": upstream.headers.get("content-type", "audio/mpeg"),
+            "Cache-Control": "public, max-age=3600",
+        }
+        # Para 206 Partial Content, NO pasar Content-Length al cliente.
+        # Razón: si el stream upstream se corta a mitad (ReadError),
+        # starlette/uvicorn lanza 'Response content shorter than
+        # Content-Length' porque ya habíamos prometido N bytes.
+        # Sin Content-Length, uvicorn usa Transfer-Encoding: chunked
+        # y el stream puede terminar 'naturalmente' sin error.
+        if upstream.status_code == 200 and "content-length" in upstream.headers:
+            pass_headers["Content-Length"] = upstream.headers["content-length"]
+        if "content-range" in upstream.headers:
+            pass_headers["Content-Range"] = upstream.headers["content-range"]
+
+        status = upstream.status_code
+
+        async def gen():
+            bytes_sent = 0
+            try:
+                async for chunk in upstream.aiter_bytes(chunk_size=64 * 1024):
+                    bytes_sent += len(chunk)
+                    yield chunk
+                log.info(f"[passthrough] stream done, sent {bytes_sent} bytes")
+            except Exception as e:
+                log.error(f"[passthrough] stream error after {bytes_sent} bytes: {type(e).__name__}: {e}")
+            finally:
+                await upstream.aclose()
+                await client.aclose()
+
+        return StreamingResponse(
+            gen(),
+            status_code=status,
+            headers=pass_headers,
+            media_type=pass_headers["Content-Type"],
+        )
+    except HTTPException:
+        raise
+    except httpx.ConnectError as e:
+        log.error(f"[passthrough] connect error: {e}")
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=f"No se pudo conectar a googlevideo: {e}")
+    except httpx.ReadTimeout as e:
+        log.error(f"[passthrough] read timeout: {e}")
+        await client.aclose()
+        raise HTTPException(status_code=504, detail="googlevideo timeout")
+    except Exception as e:
+        log.error(f"[passthrough] error: {type(e).__name__}: {e}")
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=f"Passthrough error: {type(e).__name__}")
 
 # ============================================================
 # APP
