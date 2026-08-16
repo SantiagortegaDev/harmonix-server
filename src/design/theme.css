@@ -1,0 +1,185 @@
+/* ============================================================
+   HARMONIX DESIGN THEME
+   ============================================================
+
+   ESTE ES EL ÚNICO ARCHIVO QUE NECESITA EDITAR EL DISEÑADOR.
+   Todo lo visual (colores, tipografía, radios, sombras) se controla
+   desde aquí. No hace falta tocar ningún otro archivo.
+
+   Cómo funciona:
+   1. Cambias los valores de las variables CSS de abajo.
+   2. Guardas el archivo.
+   3. Vercel auto-despliega en ~30s.
+   4. Recargas la página y ves los cambios.
+
+   Para previsualizar sin tocar el frontend real:
+   1. Abre /design-preview en el navegador.
+   2. Ahí verás todos los componentes con los tokens aplicados.
+   3. Itera en este archivo hasta que se vea como quieres.
+
+   Guía rápida de OKLCH (el formato de color que usamos):
+   - oklch(L C H) donde:
+     L = Lightness (0=negro, 1=blanco)
+     C = Chroma (0=gris, 0.3=saturado)
+     H = Hue (0=rojo, 90=amarillo, 180=verde, 270=azul, 295=violeta)
+   - Ej: oklch(0.55 0.2 295) = violeta medio saturado
+   - Para cambiar el color principal, cambia --md-primary
+   - Generador visual: https://oklch.com/
+
+   Paleta actual: VIOLETA (Material Design 3 baseline)
+   Para cambiar a otro color, busca y reemplaza el hue "295" y "285"
+   por el nuevo valor. Ejemplos:
+   - AZUL:    hue 250 (primary) / 240 (surfaces)
+   - VERDE:   hue 145 (primary) / 150 (surfaces)
+   - ROJO:    hue 25  (primary) / 20  (surfaces)
+   - NARANJA: hue 55  (primary) / 50  (surfaces)
+   ============================================================ */
+
+/* ============================================================
+   LIGHT THEME (default)
+   ============================================================ */
+:root {
+  /* ---- SURFACES (fondos) ----
+     L va de 0.98 (casi blanco) a 0.90 (gris claro).
+     Mantén el hue igual en todos para coherencia. */
+  --md-bg: oklch(0.985 0.005 285);
+  --md-on-bg: oklch(0.21 0.03 285);
+  --md-surface: oklch(0.985 0.005 285);
+  --md-on-surface: oklch(0.21 0.03 285);
+  --md-surface-1: oklch(0.97 0.006 285);
+  --md-surface-2: oklch(0.955 0.007 285);
+  --md-surface-3: oklch(0.935 0.008 285);
+  --md-surface-4: oklch(0.92 0.008 285);
+  --md-surface-5: oklch(0.905 0.009 285);
+  --md-surface-variant: oklch(0.92 0.015 285);
+  --md-on-surface-variant: oklch(0.4 0.025 285);
+
+  /* ---- PRIMARY (color de marca — botones, acentos) ----
+     Hue 295 = Violeta. Cambia este hue para cambiar el color principal. */
+  --md-primary: oklch(0.55 0.2 295);
+  --md-on-primary: oklch(0.98 0.005 295);
+  --md-primary-container: oklch(0.9 0.06 295);
+  --md-on-primary-container: oklch(0.3 0.1 295);
+
+  /* ---- SECONDARY (color secundario) ---- */
+  --md-secondary: oklch(0.7 0.07 295);
+  --md-on-secondary: oklch(0.15 0.02 295);
+  --md-secondary-container: oklch(0.93 0.03 295);
+  --md-on-secondary-container: oklch(0.25 0.05 295);
+
+  /* ---- TERTIARY (acento cálido para contraste visual) ----
+     Hue 75 = amarillo-verde. Combina con violeta. */
+  --md-tertiary: oklch(0.75 0.12 75);
+  --md-on-tertiary: oklch(0.18 0.03 75);
+  --md-tertiary-container: oklch(0.93 0.05 75);
+  --md-on-tertiary-container: oklch(0.28 0.08 75);
+
+  /* ---- OUTLINES (bordes) ---- */
+  --md-outline: oklch(0.5 0.02 285);
+  --md-outline-variant: oklch(0.85 0.015 285);
+
+  /* ---- ERROR ---- */
+  --md-error: oklch(0.6 0.22 27);
+  --md-on-error: oklch(0.98 0.01 27);
+  --md-error-container: oklch(0.9 0.07 27);
+  --md-on-error-container: oklch(0.3 0.1 27);
+
+  /* ---- SHADOWS / ELEVATION ---- */
+  --md-shadow-color: 0 0% 0%;
+  --md-elevation-1: 0 1px 2px 0 hsl(var(--md-shadow-color) / 0.30), 0 1px 3px 1px hsl(var(--md-shadow-color) / 0.15);
+  --md-elevation-2: 0 1px 2px 0 hsl(var(--md-shadow-color) / 0.30), 0 2px 6px 2px hsl(var(--md-shadow-color) / 0.15);
+  --md-elevation-3: 0 1px 3px 0 hsl(var(--md-shadow-color) / 0.30), 0 4px 8px 3px hsl(var(--md-shadow-color) / 0.15);
+  --md-elevation-4: 0 2px 3px 0 hsl(var(--md-shadow-color) / 0.30), 0 6px 10px 4px hsl(var(--md-shadow-color) / 0.15);
+  --md-elevation-5: 0 4px 4px 0 hsl(var(--md-shadow-color) / 0.30), 0 8px 12px 6px hsl(var(--md-shadow-color) / 0.15);
+
+  /* ---- RADIOS (redondeces de esquinas) ---- */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 28px;
+
+  /* ---- shadcn legacy aliases (no tocar, needed for compatibility) ---- */
+  --background: var(--md-bg);
+  --foreground: var(--md-on-bg);
+  --card: var(--md-surface);
+  --card-foreground: var(--md-on-surface);
+  --popover: var(--md-surface-2);
+  --popover-foreground: var(--md-on-surface);
+  --primary: var(--md-primary);
+  --primary-foreground: var(--md-on-primary);
+  --secondary: var(--md-secondary);
+  --secondary-foreground: var(--md-on-secondary);
+  --muted: var(--md-surface-variant);
+  --muted-foreground: var(--md-on-surface-variant);
+  --accent: var(--md-secondary);
+  --accent-foreground: var(--md-on-secondary);
+  --destructive: var(--md-error);
+  --destructive-foreground: var(--md-on-error);
+  --border: var(--md-outline-variant);
+  --input: var(--md-outline);
+  --ring: var(--md-primary);
+  --radius: 16px;
+}
+
+/* ============================================================
+   DARK THEME
+   Mismos hues que light, pero L invertido (oscuro).
+   ============================================================ */
+.dark {
+  --md-bg: oklch(0.16 0.015 285);
+  --md-on-bg: oklch(0.92 0.005 285);
+  --md-surface: oklch(0.16 0.015 285);
+  --md-on-surface: oklch(0.92 0.005 285);
+  --md-surface-1: oklch(0.20 0.018 285);
+  --md-surface-2: oklch(0.24 0.020 285);
+  --md-surface-3: oklch(0.28 0.022 285);
+  --md-surface-4: oklch(0.30 0.023 285);
+  --md-surface-5: oklch(0.32 0.024 285);
+  --md-surface-variant: oklch(0.30 0.022 285);
+  --md-on-surface-variant: oklch(0.85 0.015 285);
+
+  --md-primary: oklch(0.78 0.13 295);
+  --md-on-primary: oklch(0.18 0.05 295);
+  --md-primary-container: oklch(0.35 0.12 295);
+  --md-on-primary-container: oklch(0.93 0.03 295);
+
+  --md-secondary: oklch(0.82 0.05 295);
+  --md-on-secondary: oklch(0.20 0.03 295);
+  --md-secondary-container: oklch(0.35 0.07 295);
+  --md-on-secondary-container: oklch(0.93 0.02 295);
+
+  --md-tertiary: oklch(0.85 0.10 75);
+  --md-on-tertiary: oklch(0.20 0.04 75);
+  --md-tertiary-container: oklch(0.35 0.08 75);
+  --md-on-tertiary-container: oklch(0.93 0.02 75);
+
+  --md-outline: oklch(0.7 0.015 285);
+  --md-outline-variant: oklch(0.35 0.018 285);
+
+  --md-error: oklch(0.85 0.13 27);
+  --md-on-error: oklch(0.20 0.05 27);
+  --md-error-container: oklch(0.35 0.12 27);
+  --md-on-error-container: oklch(0.93 0.02 27);
+
+  --md-shadow-color: 0 0% 0%;
+
+  --background: var(--md-bg);
+  --foreground: var(--md-on-bg);
+  --card: var(--md-surface-1);
+  --card-foreground: var(--md-on-surface);
+  --popover: var(--md-surface-2);
+  --popover-foreground: var(--md-on-surface);
+  --primary: var(--md-primary);
+  --primary-foreground: var(--md-on-primary);
+  --secondary: var(--md-secondary);
+  --secondary-foreground: var(--md-on-secondary);
+  --muted: var(--md-surface-variant);
+  --muted-foreground: var(--md-on-surface-variant);
+  --accent: var(--md-secondary);
+  --accent-foreground: var(--md-on-secondary);
+  --destructive: var(--md-error);
+  --destructive-foreground: var(--md-on-error);
+  --border: var(--md-outline-variant);
+  --input: var(--md-outline);
+  --ring: var(--md-primary);
+}

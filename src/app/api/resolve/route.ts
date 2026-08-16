@@ -1,28 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 
 /**
- * API Route: /api/resolve?video_id=XXX&quality=auto|best|128|192
+ * API Route: /api/resolve?video_id=XXX&quality=auto|best|128|192&prefetch=0|1
  *
  * Resuelve un video_id a una URL reproducible apuntando al backend
  * de la Pi 5 (que corre detrás de Cloudflare Tunnel).
  *
- * No hace fetch directo a YouTube desde el frontend — solo devuelve
- * la URL del stream-proxy de la Pi, que es la que el <audio> debe cargar.
+ * Modo normal (sin prefetch): devuelve {PI_STREAM_BASE}/stream/{video_id}
+ *   → el <audio> carga directo de la Pi, que hace passthrough a googlevideo.
  *
- * El backend de la Pi hace:
- *  1. Lookup en cache SQLite (TTL 5h)
- *  2. Si miss → yt-dlp -g para obtener URL firmada de googlevideo
- *  3. Reverse-proxy passthrough hacia googlevideo preservando la IP
- *
- * La URL que devolvemos aquí es:
- *   {PI_STREAM_BASE}/stream/{video_id}?quality={q}
- *
- * PI_STREAM_BASE se lee de variable de entorno para no harcoder el dominio.
+ * Modo prefetch (prefetch=1): devuelve la URL /prefetch/{video_id} de la Pi.
+ *   → la Pi extrae y cachea la URL, pero NO hace streaming.
+ *   → cuando el usuario haga click, /stream/{video_id} será cache hit → <50ms.
+ *   → el frontend lo llama fire-and-forget al mostrar resultados de búsqueda.
  */
 
 export async function GET(req: NextRequest) {
   const videoId = req.nextUrl.searchParams.get("video_id")?.trim();
   const quality = req.nextUrl.searchParams.get("quality") || "auto";
+  const isPrefetch = req.nextUrl.searchParams.get("prefetch") === "1";
 
   if (!videoId) {
     return NextResponse.json(
@@ -44,22 +40,47 @@ export async function GET(req: NextRequest) {
   }
 
   // Normalizar: si no empieza con http:// o https://, agregar https://
-  // Esto evita el bug de "URL relativa" cuando alguien configura solo
-  // "api-stream-harmonix.santiagortega.dev" sin esquema.
   if (!/^https?:\/\//i.test(piBase)) {
     piBase = `https://${piBase}`;
   }
-  // Quitar trailing slash
   piBase = piBase.replace(/\/$/, "");
 
-  // Construimos la URL final. El navegador la pondrá como <audio src>.
+  // En modo prefetch, llamamos al endpoint /prefetch de la Pi que calienta
+  // el cache sin hacer streaming. Devuelve JSON, no audio.
+  if (isPrefetch) {
+    const prefetchUrl = `${piBase}/prefetch/${encodeURIComponent(videoId)}?quality=${encodeURIComponent(quality)}`;
+    try {
+      const piRes = await fetch(prefetchUrl, {
+        // Timeout generoso: la extracción puede tardar 3-5s la primera vez
+        signal: AbortSignal.timeout(15000),
+      });
+      const data = await piRes.json().catch(() => ({}));
+      return NextResponse.json({
+        videoId,
+        quality,
+        prefetch: true,
+        status: data.status || "unknown",
+        ok: data.ok === true,
+      });
+    } catch (e) {
+      // Prefetch es best-effort, no propagar error al frontend
+      return NextResponse.json({
+        videoId,
+        quality,
+        prefetch: true,
+        status: "failed",
+        ok: false,
+      });
+    }
+  }
+
+  // Modo normal: devolver la URL de /stream para que el <audio> la cargue
   const streamUrl = `${piBase}/stream/${encodeURIComponent(videoId)}?quality=${encodeURIComponent(quality)}`;
 
   return NextResponse.json({
     videoId,
     quality,
     streamUrl,
-    // Metadatos para que el frontend muestre estado mientras carga
     note: "El audio comienza a sonar cuando la Pi resuelva la URL (cache hit <50ms, primer play 1-2s)",
   });
 }

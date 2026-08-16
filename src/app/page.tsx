@@ -68,7 +68,24 @@ export default function Home() {
       }
       const data = await res.json();
       setResults(data.items || []);
-      if (!data.items?.length) toast.info("Sin resultados para esa búsqueda");
+      if (!data.items?.length) {
+        toast.info("Sin resultados para esa búsqueda");
+        return;
+      }
+
+      // ===== PREFETCH en background =====
+      // Disparar prefetch de los primeros 3 resultados para que cuando
+      // el usuario haga click, la URL ya esté cacheada en la Pi → <50ms.
+      // Fire-and-forget: no bloquea la UI, no muestra errores al usuario.
+      const top3 = data.items.slice(0, 3);
+      top3.forEach((track: Track, i: number) => {
+        // Pequeño stagger para no saturar la Pi con 3 extracciones simultáneas
+        setTimeout(() => {
+          fetch(`/api/resolve?video_id=${track.videoId}&quality=auto&prefetch=1`)
+            .then(() => console.log(`[prefetch] warmed ${track.videoId}`))
+            .catch(() => {/* silent fail, prefetch es best-effort */});
+        }, i * 400);
+      });
     } catch (e) {
       toast.error("No se pudo conectar con el backend de búsqueda");
     } finally {
@@ -348,7 +365,7 @@ function Hero() {
       </p>
       <div className="grid grid-cols-3 gap-3 mt-10 w-full max-w-2xl">
         <Feature icon={<Zap className="w-5 h-5" />} title="<3s" subtitle="Primer audio" />
-        <Feature icon={<Clock className="w-5 h-5" />} title="5h TTL" subtitle="Cache de URLs" />
+        <Feature icon={<Clock className="w-5 h-5" />} title="24h TTL" subtitle="Cache de URLs" />
         <Feature icon={<Radio className="w-5 h-5" />} title="Pi 5" subtitle="IP residencial" />
       </div>
     </section>

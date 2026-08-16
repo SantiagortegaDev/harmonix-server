@@ -42,7 +42,7 @@ BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "cache.db"
 LOG_PATH = BASE_DIR / "stream.log"
 
-CACHE_TTL = int(os.getenv("CACHE_TTL", "18000"))  # 5h (la URL dura 6h)
+CACHE_TTL = int(os.getenv("CACHE_TTL", "86400"))  # 24h (la URL dura 6h, pero re-validamos en stream)
 RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "3600"))  # 1h
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "250"))  # <300 de YouTube
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8000"))
@@ -74,11 +74,13 @@ YTDLP_BASE_ARGS = [
     "-g",                                    # solo imprimir URL
     "--no-warnings",
     "--no-playlist",
-    "--retries", "3",
-    "--fragment-retries", "3",
-    "--sleep-requests", "1",                 # 1s entre requests (suave)
-    "--sleep-interval", "1",
-    "--max-sleep-interval", "3",
+    "--retries", "1",                        # 1 solo retry (default 10 es muy lento)
+    "--fragment-retries", "1",
+    # SIN sleep-requests ni sleep-interval.
+    # Antes teníamos --sleep-requests 1 --sleep-interval 1 --max-sleep-interval 3
+    # que añadía 2-4s de espera pura por paranoia anti-ban.
+    # Con cookies + IP residencial + rate limit interno (250/h), no son necesarios.
+    # Esto reduce el tiempo de extracción de ~10s a ~3-4s.
     # IMPORTANTE 2025+: YouTube ahora exige PO Token (Proof of Origin)
     # para la mayoría de player clients. Sin PO Token, solo devuelve
     # storyboards (imágenes), no audio/video.
@@ -163,11 +165,12 @@ def db_conn():
     return conn
 
 def cache_get(video_id: str, quality: str) -> Optional[dict]:
-    now = int(time.time())
+    """Devuelve entrada del cache si existe, sin importar si expiró.
+    La passthrough re-extraerá si la URL falla."""
     with db_conn() as c:
         row = c.execute(
-            "SELECT * FROM stream_cache WHERE video_id=? AND quality=? AND expire_ts > ?",
-            (video_id, quality, now + 600),  # margen 10 min
+            "SELECT * FROM stream_cache WHERE video_id=? AND quality=?",
+            (video_id, quality),
         ).fetchone()
         if row:
             c.execute(
@@ -487,6 +490,34 @@ async def info(video_id: str, quality: str = "auto"):
     if cached:
         return {"video_id": video_id, "quality": quality, "cached": True, "expire_ts": cached["expire_ts"]}
     return {"video_id": video_id, "quality": quality, "cached": False}
+
+@app.get("/prefetch/{video_id}")
+async def prefetch(video_id: str, quality: str = Query("auto", pattern="^(auto|best|128|192)$")):
+    """
+    Calienta el cache sin hacer streaming.
+    El frontend lo llama en background al mostrar resultados de búsqueda,
+    para que cuando el usuario haga click, la URL ya esté cacheada → <50ms.
+    """
+    import re
+    if not video_id or not re.match(r"^[A-Za-z0-9_-]{6,16}$", video_id):
+        raise HTTPException(status_code=400, detail="video_id inválido")
+
+    # Si ya está en cache, no hacer nada
+    cached = cache_get(video_id, quality)
+    if cached:
+        log.info(f"[prefetch] cache hit video_id={video_id} (already cached)")
+        return {"ok": True, "video_id": video_id, "status": "cached", "quality": quality}
+
+    # Extraer y cachear en background (no bloquea la respuesta)
+    try:
+        extracted = await extract_stream_url(video_id, quality)
+        cache_put(video_id, quality, extracted["url"], extracted["mime"], CACHE_TTL)
+        log.info(f"[prefetch] warmed video_id={video_id} mime={extracted['mime']}")
+        return {"ok": True, "video_id": video_id, "status": "extracted", "mime": extracted["mime"], "quality": quality}
+    except HTTPException as e:
+        # No propagar el error — prefetch es best-effort
+        log.warning(f"[prefetch] failed video_id={video_id}: {e.detail}")
+        return {"ok": False, "video_id": video_id, "status": "failed", "error": str(e.detail)}
 
 @app.get("/stream/{video_id}")
 async def stream(
